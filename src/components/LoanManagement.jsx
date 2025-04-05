@@ -56,7 +56,11 @@ import {
   Print as PrintIcon,
   QrCode as QrCodeIcon,
   QrCodeScanner as QrCodeScannerIcon,
+  FlashOn as FlashOnIcon,
+  FlashOff as FlashOffIcon,
 } from "@mui/icons-material";
+import QRCode from "qrcode";
+import jsQR from "jsqr";
 
 const LoanManagement = () => {
   const receiptRef = useRef(null);
@@ -101,6 +105,101 @@ const LoanManagement = () => {
   const [qrScannerActive, setQRScannerActive] = useState(false);
   const [scannerResult, setScannerResult] = useState(null);
   const videoRef = useRef(null);
+  const [qrCodeData, setQrCodeData] = useState("");
+  const canvasRef = useRef(null);
+  const [cameras, setCameras] = useState([]);
+  const [selectedCamera, setSelectedCamera] = useState("");
+  const [torchAvailable, setTorchAvailable] = useState(false);
+  const [torchActive, setTorchActive] = useState(false);
+  const currentStreamRef = useRef(null);
+
+  // Add a manual entry option for QR data
+  const [manualQRInput, setManualQRInput] = useState("");
+
+  const handleManualQRSubmit = () => {
+    if (manualQRInput.trim() === "") {
+      setScannerResult("Please enter QR code data");
+      return;
+    }
+
+    try {
+      // Try to process the input in various formats
+      let processedInput = manualQRInput.trim();
+
+      // If it's a URL or contains URL encoded data, try to extract
+      if (processedInput.includes("%")) {
+        try {
+          processedInput = decodeURIComponent(processedInput);
+        } catch (e) {
+          console.log("Not a URL encoded string");
+        }
+      }
+
+      // Try to parse as JSON if it looks like JSON
+      if (
+        (processedInput.startsWith("{") && processedInput.endsWith("}")) ||
+        (processedInput.startsWith("[") && processedInput.endsWith("]"))
+      ) {
+        try {
+          // Validate if it's parseable JSON but keep as string
+          JSON.parse(processedInput);
+        } catch (e) {
+          console.log("Invalid JSON format:", e);
+        }
+      }
+
+      // For QR codes from loan receipts, they might start with LOAN- or contain specific patterns
+      // Allow direct ID entry for simplicity
+      if (/^\d+$/.test(processedInput)) {
+        processedInput = JSON.stringify({
+          loansIds: [parseInt(processedInput)],
+        });
+      }
+
+      handleScannedQRCode(processedInput);
+    } catch (error) {
+      console.error("Error processing manual QR input:", error);
+      setScannerResult("Invalid QR code data format");
+    }
+  };
+
+  // Debug function to show the current camera view as an image
+  const captureSnapshot = () => {
+    if (!videoRef.current || !canvasRef.current) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+
+    // Set canvas size to match video dimensions
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    // Draw current video frame to canvas
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    // Draw scanning overlay for reference
+    ctx.strokeStyle = "#4caf50";
+    ctx.lineWidth = 4;
+
+    // Draw scan region indicator
+    const scanWidth = Math.floor(canvas.width * 0.6);
+    const scanHeight = Math.floor(canvas.height * 0.6);
+    const startX = Math.floor((canvas.width - scanWidth) / 2);
+    const startY = Math.floor((canvas.height - scanHeight) / 2);
+
+    ctx.strokeRect(startX, startY, scanWidth, scanHeight);
+
+    // Convert to data URL
+    const imageDataUrl = canvas.toDataURL("image/png");
+
+    // Set to state to display in dialog
+    setDebugImage(imageDataUrl);
+    setShowDebugImage(true);
+  };
+
+  const [debugImage, setDebugImage] = useState(null);
+  const [showDebugImage, setShowDebugImage] = useState(false);
 
   useEffect(() => {
     const fetchInitialData = async () => {
@@ -235,18 +334,23 @@ const LoanManagement = () => {
       const transactionId = `LOAN-${Date.now()}-${selectedMember.id}`;
 
       // Prepare receipt data
-      setReceiptData({
+      const receiptInfo = {
         transactionId,
         member: selectedMember,
         books: selectedBooks,
         checkoutDate,
         dueDate,
-        loansIds: Array.isArray(result) ? result.map(loan => loan.id) : [],
-      });
+        loansIds: Array.isArray(result) ? result.map((loan) => loan.id) : [],
+      };
+
+      setReceiptData(receiptInfo);
+
+      // Generate QR code
+      await generateQRData(receiptInfo);
 
       // Show receipt
       setOpenReceiptDialog(true);
-      
+
       setSnackbar({
         open: true,
         message: `${selectedBooks.length} books borrowed successfully`,
@@ -466,40 +570,104 @@ const LoanManagement = () => {
   const handlePrintReceipt = () => {
     if (receiptRef.current) {
       const printContent = receiptRef.current;
-      const originalContents = document.body.innerHTML;
-      
-      const printWindow = window.open('', '_blank');
-      printWindow.document.write('<html><head><title>Loan Receipt</title>');
-      printWindow.document.write('<style>');
+
+      const printWindow = window.open("", "_blank");
+      printWindow.document.write("<html><head><title>Loan Receipt</title>");
+      printWindow.document.write("<style>");
       printWindow.document.write(`
-        body { font-family: Arial, sans-serif; padding: 20px; }
-        .receipt { max-width: 800px; margin: 0 auto; padding: 20px; border: 1px solid #ccc; }
-        .receipt-header { text-align: center; margin-bottom: 20px; }
-        .library-name { font-size: 24px; font-weight: bold; margin-bottom: 5px; }
-        .receipt-title { font-size: 18px; margin-bottom: 20px; }
-        .qr-section { text-align: center; margin: 20px 0; }
-        .member-details, .loan-details { margin-bottom: 20px; }
-        .book-list { margin-top: 10px; }
-        .book-item { padding: 10px; border-bottom: 1px solid #eee; }
-        .book-title { font-weight: bold; }
-        .footer { margin-top: 30px; font-size: 12px; }
-        .signature-line { margin-top: 50px; border-top: 1px solid #000; width: 200px; display: inline-block; }
-        .due-date { color: #c6121f; font-weight: bold; }
-        table { width: 100%; border-collapse: collapse; margin: 15px 0; }
-        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { font-weight: bold; background-color: #f2f2f2; }
+        /* Thermal printer optimized styles */
+        @page {
+          size: 80mm auto; /* Standard thermal paper width */
+          margin: 0;
+        }
+        body {
+          font-family: 'Courier New', monospace; /* Standard for thermal printers */
+          font-size: 12px;
+          width: 80mm;
+          padding: 5mm;
+          margin: 0 auto;
+        }
+        .receipt {
+          width: 100%;
+        }
+        .receipt-header {
+          text-align: center;
+          margin-bottom: 10px;
+        }
+        .library-name {
+          font-size: 16px;
+          font-weight: bold;
+          margin-bottom: 3px;
+        }
+        .receipt-title {
+          font-size: 14px;
+          margin-bottom: 10px;
+          border-bottom: 1px dashed #000;
+          padding-bottom: 5px;
+        }
+        .qr-section {
+          text-align: center;
+          margin: 10px 0;
+        }
+        .member-details, .loan-details {
+          margin-bottom: 10px;
+        }
+        h3 {
+          font-size: 13px;
+          margin: 5px 0;
+          border-bottom: 1px solid #000;
+        }
+        .detail-row {
+          display: flex;
+          justify-content: space-between;
+          margin-bottom: 3px;
+        }
+        .book-list {
+          margin-top: 5px;
+        }
+        .book-item {
+          padding: 3px 0;
+          border-bottom: 1px dotted #ccc;
+        }
+        .footer {
+          margin-top: 15px;
+          font-size: 11px;
+          text-align: center;
+          border-top: 1px dashed #000;
+          padding-top: 5px;
+        }
+        .due-date {
+          font-weight: bold;
+        }
+        table {
+          width: 100%;
+          border-collapse: collapse;
+          margin: 8px 0;
+          font-size: 11px;
+        }
+        th, td {
+          padding: 4px;
+          text-align: left;
+          border-bottom: 1px dotted #ddd;
+        }
+        th {
+          font-weight: bold;
+        }
         @media print {
-          body { padding: 0; }
+          body {
+            width: 100%;
+            padding: 0;
+          }
           button { display: none; }
         }
       `);
-      printWindow.document.write('</style></head><body>');
+      printWindow.document.write("</style></head><body>");
       printWindow.document.write(printContent.innerHTML);
-      printWindow.document.write('</body></html>');
-      
+      printWindow.document.write("</body></html>");
+
       printWindow.document.close();
       printWindow.focus();
-      
+
       // Print after a short delay to ensure content is rendered
       setTimeout(() => {
         printWindow.print();
@@ -508,95 +676,80 @@ const LoanManagement = () => {
   };
 
   // Generate QR code data
-  const generateQRData = (data) => {
+  const generateQRData = async (data) => {
     if (!data) return "";
-    
-    const qrData = {
-      transactionId: data.transactionId,
-      memberId: data.member.id,
-      memberName: data.member.name,
-      loansIds: data.loansIds,
-      checkoutDate: data.checkoutDate,
-      dueDate: data.dueDate,
-    };
-    
-    return `https://chart.googleapis.com/chart?cht=qr&chs=200x200&chl=${encodeURIComponent(JSON.stringify(qrData))}`;
-  };
 
-  const handleOpenQRScannerDialog = () => {
-    setOpenQRScannerDialog(true);
-    setScannerResult(null);
-  };
-
-  const handleCloseQRScannerDialog = () => {
-    setOpenQRScannerDialog(false);
-    stopQRScanner();
-  };
-
-  const startQRScanner = async () => {
-    if (!videoRef.current) return;
-    
-    setQRScannerActive(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" }
+      const qrData = {
+        transactionId: data.transactionId,
+        memberId: data.member.id,
+        memberName: data.member.name,
+        loansIds: data.loansIds,
+        checkoutDate: data.checkoutDate,
+        dueDate: data.dueDate,
+      };
+
+      // Generate QR code as data URL
+      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrData), {
+        width: 200,
+        margin: 2,
+        color: {
+          dark: "#000",
+          light: "#FFF",
+        },
       });
-      
-      videoRef.current.srcObject = stream;
-      
-      // If using a library for QR scanning, initialize it here
-      // For this example, we'll simulate a scan by setting a timeout
-      setTimeout(() => {
-        if (qrScannerActive) {
-          simulateQRScan();
-        }
-      }, 3000);
-      
+
+      setQrCodeData(qrDataUrl);
+      return qrDataUrl;
     } catch (error) {
-      console.error("Error accessing camera:", error);
-      setSnackbar({
-        open: true,
-        message: "Failed to access camera. Please allow camera permissions.",
-        severity: "error",
-      });
-      setQRScannerActive(false);
+      console.error("Error generating QR code:", error);
+      return "";
     }
   };
-  
-  const stopQRScanner = () => {
-    setQRScannerActive(false);
-    if (videoRef.current && videoRef.current.srcObject) {
-      const tracks = videoRef.current.srcObject.getTracks();
-      tracks.forEach(track => track.stop());
-      videoRef.current.srcObject = null;
-    }
-  };
-  
-  // This is a simulation for demo purposes
-  // In a real app, you'd use a library like jsQR or similar
-  const simulateQRScan = () => {
-    // Mock QR scan result containing loan information
-    const mockQRData = {
-      transactionId: `LOAN-${Date.now()}-1`,
-      memberId: 1,
-      memberName: "John Doe",
-      loansIds: [1, 2],
-      checkoutDate: "2023-10-01",
-      dueDate: "2023-10-15"
-    };
-    
-    // Handle the scanned QR code
-    handleScannedQRCode(JSON.stringify(mockQRData));
-  };
-  
+
   const handleScannedQRCode = async (qrData) => {
     stopQRScanner();
-    
+
     try {
       setScannerResult("Processing QR code...");
-      
-      const result = await window.api.returnBooksViaQR(qrData);
-      
+
+      console.log("QR Data being processed:", qrData);
+
+      // Try to fix common QR code issues before sending to API
+      let processedData = qrData;
+
+      // If it's a simple number (loan ID), convert to expected format
+      if (/^\d+$/.test(processedData)) {
+        processedData = JSON.stringify({ loansIds: [parseInt(processedData)] });
+        console.log("Converted numeric ID to JSON format:", processedData);
+      }
+
+      // If it looks like JSON but isn't parsed yet
+      if (
+        typeof processedData === "string" &&
+        (processedData.startsWith("{") || processedData.startsWith("["))
+      ) {
+        try {
+          // Verify it's valid JSON by parsing and re-stringifying to clean it
+          const jsonObj = JSON.parse(processedData);
+
+          // If it's missing the loansIds field but has other identifiers
+          if (!jsonObj.loansIds && jsonObj.transactionId) {
+            console.log(
+              "Found transaction without loan IDs, adding from receiptData if available"
+            );
+            // Try to use transactionId to identify the loan
+            jsonObj.transactionType = "loan";
+          }
+
+          processedData = JSON.stringify(jsonObj);
+        } catch (e) {
+          console.log("Not valid JSON, using as-is:", e);
+        }
+      }
+
+      const result = await window.api.returnBooksViaQR(processedData);
+
       if (result.success) {
         setScannerResult(result.message);
         setSnackbar({
@@ -604,7 +757,7 @@ const LoanManagement = () => {
           message: result.message,
           severity: "success",
         });
-        
+
         // Refresh the loans list after a successful return
         setTimeout(() => {
           fetchLoansByTab(activeTab);
@@ -627,6 +780,523 @@ const LoanManagement = () => {
         severity: "error",
       });
     }
+  };
+
+  const scanQRCode = () => {
+    if (!qrScannerActive || !videoRef.current || !canvasRef.current) return;
+
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+
+    // Only process if video is playing
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      // Set canvas size to match video dimensions
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
+      // Draw current video frame to canvas
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // Get image data for QR detection
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+      // Try multiple scanning approaches
+      let code = null;
+
+      // Try to detect QR code in the original image first
+      try {
+        // Make a copy of the original image data for multiple attempts
+        const originalImageData = new Uint8ClampedArray(imageData.data);
+
+        // Attempt 1: Original image with aggressive settings
+        code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: "attemptBoth",
+          canOverwriteImage: true,
+        });
+
+        if (code) {
+          console.log("QR code detected in original image");
+        } else {
+          // Attempt 2: Try with binary threshold (higher contrast black and white)
+          for (let i = 0; i < imageData.data.length; i += 4) {
+            const avg =
+              (imageData.data[i] +
+                imageData.data[i + 1] +
+                imageData.data[i + 2]) /
+              3;
+            const val = avg > 100 ? 255 : 0;
+            imageData.data[i] =
+              imageData.data[i + 1] =
+              imageData.data[i + 2] =
+                val;
+          }
+
+          code = jsQR(imageData.data, imageData.width, imageData.height, {
+            inversionAttempts: "attemptBoth",
+            canOverwriteImage: true,
+          });
+
+          if (code) {
+            console.log("QR code detected with binary threshold");
+          } else {
+            // Restore original image data for next attempt
+            for (let i = 0; i < imageData.data.length; i++) {
+              imageData.data[i] = originalImageData[i];
+            }
+
+            // Attempt 3: Try with brightness boost
+            for (let i = 0; i < imageData.data.length; i += 4) {
+              // Boost brightness by 20%
+              imageData.data[i] = Math.min(255, imageData.data[i] * 1.2);
+              imageData.data[i + 1] = Math.min(
+                255,
+                imageData.data[i + 1] * 1.2
+              );
+              imageData.data[i + 2] = Math.min(
+                255,
+                imageData.data[i + 2] * 1.2
+              );
+            }
+
+            code = jsQR(imageData.data, imageData.width, imageData.height, {
+              inversionAttempts: "attemptBoth",
+              canOverwriteImage: true,
+            });
+
+            if (code) {
+              console.log("QR code detected with brightness boost");
+            } else {
+              // Restore original image for next attempt
+              for (let i = 0; i < imageData.data.length; i++) {
+                imageData.data[i] = originalImageData[i];
+              }
+
+              // Attempt 4: Try scanning different sizes of the center region
+              const attemptCenterRegions = [0.8, 0.6, 0.4];
+
+              for (const regionSize of attemptCenterRegions) {
+                if (code) break; // Stop if already found
+
+                const centerWidth = Math.floor(imageData.width * regionSize);
+                const centerHeight = Math.floor(imageData.height * regionSize);
+                const startX = Math.floor((imageData.width - centerWidth) / 2);
+                const startY = Math.floor(
+                  (imageData.height - centerHeight) / 2
+                );
+
+                // Create new image data for the center region
+                const centerImageData = ctx.createImageData(
+                  centerWidth,
+                  centerHeight
+                );
+
+                // Copy center region pixels
+                for (let y = 0; y < centerHeight; y++) {
+                  for (let x = 0; x < centerWidth; x++) {
+                    const targetIndex = (y * centerWidth + x) * 4;
+                    const sourceIndex =
+                      ((startY + y) * imageData.width + (startX + x)) * 4;
+
+                    centerImageData.data[targetIndex] =
+                      imageData.data[sourceIndex];
+                    centerImageData.data[targetIndex + 1] =
+                      imageData.data[sourceIndex + 1];
+                    centerImageData.data[targetIndex + 2] =
+                      imageData.data[sourceIndex + 2];
+                    centerImageData.data[targetIndex + 3] =
+                      imageData.data[sourceIndex + 3];
+                  }
+                }
+
+                code = jsQR(centerImageData.data, centerWidth, centerHeight, {
+                  inversionAttempts: "attemptBoth",
+                  canOverwriteImage: true,
+                });
+
+                if (code) {
+                  console.log(
+                    `QR code detected in ${regionSize * 100}% center region`
+                  );
+
+                  // Display the detected region for visual feedback
+                  ctx.lineWidth = 4;
+                  ctx.strokeStyle = "#FF3B58";
+                  ctx.strokeRect(startX, startY, centerWidth, centerHeight);
+                }
+              }
+
+              // Attempt 5: Try adaptive thresholding if still no code found
+              if (!code) {
+                adaptiveThreshold(imageData);
+
+                code = jsQR(imageData.data, imageData.width, imageData.height, {
+                  inversionAttempts: "attemptBoth",
+                  canOverwriteImage: true,
+                });
+
+                if (code) {
+                  console.log("QR code detected with adaptive threshold");
+                }
+              }
+            }
+          }
+        }
+
+        // If QR code is found in any attempt
+        if (code) {
+          console.log("QR code detected:", code.data);
+
+          // Draw detection indicators
+          if (code.location) {
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = "#FF3B58";
+            ctx.beginPath();
+            ctx.moveTo(
+              code.location.topLeftCorner.x,
+              code.location.topLeftCorner.y
+            );
+            ctx.lineTo(
+              code.location.topRightCorner.x,
+              code.location.topRightCorner.y
+            );
+            ctx.lineTo(
+              code.location.bottomRightCorner.x,
+              code.location.bottomRightCorner.y
+            );
+            ctx.lineTo(
+              code.location.bottomLeftCorner.x,
+              code.location.bottomLeftCorner.y
+            );
+            ctx.lineTo(
+              code.location.topLeftCorner.x,
+              code.location.topLeftCorner.y
+            );
+            ctx.stroke();
+          }
+
+          // Play success sound
+          const successAudio = new Audio(
+            "data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA/+M4wAAAAAAAAAAAAEluZm8AAAAPAAAAAwAAAbAAeHh4eHh4eHh4eHh4eHh4eHh4eHh4eHiNjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2ysrKysrKysrKysrKysrKysrKysrKysrKy1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1v////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAYJQ//zgwHgAAAOFpOUAAIDTEFNRTMuMTAwVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/84MBlgAADlgAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVX/84MBnAAADlIAAAABVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU="
+          );
+
+          successAudio
+            .play()
+            .catch((e) => console.log("Audio play prevented by browser"));
+
+          // Process the QR code
+          handleScannedQRCode(code.data);
+          return;
+        }
+      } catch (error) {
+        console.error("Error during QR code scanning:", error);
+      }
+    }
+
+    // Continue scanning if no code found
+    requestAnimationFrame(scanQRCode);
+  };
+
+  // Helper function for adaptive thresholding
+  const adaptiveThreshold = (imageData) => {
+    const width = imageData.width;
+    const height = imageData.height;
+    const grayData = new Uint8ClampedArray(width * height);
+
+    // Convert to grayscale
+    for (let i = 0; i < imageData.data.length; i += 4) {
+      const gray =
+        0.299 * imageData.data[i] +
+        0.587 * imageData.data[i + 1] +
+        0.114 * imageData.data[i + 2];
+      grayData[i / 4] = gray;
+    }
+
+    // Apply adaptive threshold with larger window
+    const windowSize = 15; // Use a 15x15 window
+    const t = 10; // threshold value offset
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        const grayIdx = y * width + x;
+
+        let sum = 0;
+        let count = 0;
+
+        // Average of the surrounding pixels
+        for (
+          let j = Math.max(0, y - windowSize);
+          j <= Math.min(height - 1, y + windowSize);
+          j++
+        ) {
+          for (
+            let i = Math.max(0, x - windowSize);
+            i <= Math.min(width - 1, x + windowSize);
+            i++
+          ) {
+            sum += grayData[j * width + i];
+            count++;
+          }
+        }
+
+        const avg = sum / count;
+        const threshold = avg - t; // Slight offset to favor white
+
+        const value = grayData[grayIdx] < threshold ? 0 : 255;
+        imageData.data[idx] =
+          imageData.data[idx + 1] =
+          imageData.data[idx + 2] =
+            value;
+      }
+    }
+  };
+
+  const stopQRScanner = () => {
+    setQRScannerActive(false);
+    setTorchActive(false);
+    if (videoRef.current && videoRef.current.srcObject) {
+      const tracks = videoRef.current.srcObject.getTracks();
+      tracks.forEach((track) => track.stop());
+      videoRef.current.srcObject = null;
+      currentStreamRef.current = null;
+    }
+  };
+
+  const toggleTorch = async () => {
+    if (!currentStreamRef.current) return;
+
+    try {
+      const newTorchState = !torchActive;
+      const track = currentStreamRef.current.getVideoTracks()[0];
+
+      // Apply torch constraint
+      await track.applyConstraints({
+        advanced: [{ torch: newTorchState }],
+      });
+
+      setTorchActive(newTorchState);
+    } catch (error) {
+      console.error("Error toggling torch:", error);
+      setSnackbar({
+        open: true,
+        message: "Failed to toggle flashlight",
+        severity: "error",
+      });
+    }
+  };
+
+  const handleCloseQRScannerDialog = () => {
+    setOpenQRScannerDialog(false);
+    stopQRScanner();
+  };
+
+  const startQRScanner = async () => {
+    if (!videoRef.current) return;
+
+    setQRScannerActive(true);
+    setScannerResult("Camera activating...");
+
+    try {
+      // Use the selected camera device
+      let constraints = {};
+
+      if (selectedCamera === "environment") {
+        // Use environment facing camera with better resolution setting
+        constraints = {
+          video: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            aspectRatio: { ideal: 1.777777778 },
+            frameRate: { ideal: 30 },
+          },
+          audio: false,
+        };
+      } else {
+        // Use specific camera by deviceId with better resolution setting
+        constraints = {
+          video: {
+            deviceId: { exact: selectedCamera },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            aspectRatio: { ideal: 1.777777778 },
+            frameRate: { ideal: 30 },
+          },
+          audio: false,
+        };
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      currentStreamRef.current = stream;
+
+      videoRef.current.srcObject = stream;
+      videoRef.current.play();
+
+      // Check for torch/flashlight capability
+      const track = stream.getVideoTracks()[0];
+      const capabilities = track.getCapabilities();
+      setTorchAvailable(capabilities.torch || false);
+
+      // Set highest possible constraint settings for video
+      try {
+        const settings = track.getSettings();
+        console.log("Camera settings:", settings);
+
+        // Attempt to apply better focus mode
+        if (
+          capabilities.focusMode &&
+          capabilities.focusMode.includes("continuous")
+        ) {
+          await track.applyConstraints({
+            advanced: [{ focusMode: "continuous" }],
+          });
+        }
+
+        // Try to optimize exposure for QR scanning
+        if (
+          capabilities.exposureMode &&
+          capabilities.exposureMode.includes("continuous")
+        ) {
+          await track.applyConstraints({
+            advanced: [{ exposureMode: "continuous" }],
+          });
+        }
+      } catch (e) {
+        console.log("Error applying advanced camera constraints:", e);
+      }
+
+      // Once video is playing, start scanning
+      videoRef.current.onloadedmetadata = () => {
+        setScannerResult("Scanning for QR code...");
+        requestAnimationFrame(scanQRCode);
+      };
+    } catch (error) {
+      console.error("Error accessing camera:", error);
+      setSnackbar({
+        open: true,
+        message: "Failed to access camera. Please allow camera permissions.",
+        severity: "error",
+      });
+      setQRScannerActive(false);
+      setScannerResult(
+        "Camera access denied. Try using the manual QR entry option below."
+      );
+    }
+  };
+
+  const handleCameraChange = (event) => {
+    setSelectedCamera(event.target.value);
+
+    // If scanner is already active, restart it with the new camera
+    if (qrScannerActive) {
+      stopQRScanner();
+      // Short delay to ensure camera is fully stopped
+      setTimeout(() => {
+        startQRScanner();
+      }, 300);
+    }
+  };
+
+  // Add state for direct loan entry
+  const [showDirectLoanInput, setShowDirectLoanInput] = useState(true);
+  const [directLoanId, setDirectLoanId] = useState("");
+
+  const handleDirectLoanReturn = async () => {
+    if (!directLoanId.trim() || !/^\d+$/.test(directLoanId.trim())) {
+      setSnackbar({
+        open: true,
+        message: "Please enter a valid loan ID (numbers only)",
+        severity: "error",
+      });
+      return;
+    }
+
+    setScannerResult("Processing loan return...");
+
+    try {
+      // Format the data for the API
+      const data = JSON.stringify({
+        loansIds: [parseInt(directLoanId.trim())],
+      });
+
+      const result = await window.api.returnBooksViaQR(data);
+
+      if (result.success) {
+        setScannerResult(result.message);
+        setSnackbar({
+          open: true,
+          message: result.message,
+          severity: "success",
+        });
+
+        // Refresh the loans list
+        setTimeout(() => {
+          fetchLoansByTab(activeTab);
+          setDirectLoanId("");
+          handleCloseQRScannerDialog();
+        }, 2000);
+      } else {
+        setScannerResult(`Error: ${result.message}`);
+        setSnackbar({
+          open: true,
+          message: result.message,
+          severity: "error",
+        });
+      }
+    } catch (error) {
+      console.error("Error processing loan return:", error);
+      setScannerResult("Failed to process loan return");
+      setSnackbar({
+        open: true,
+        message: "Failed to process loan return",
+        severity: "error",
+      });
+    }
+  };
+
+  const getCameraDevices = () => {
+    setCameras([]); // Reset cameras list
+
+    navigator.mediaDevices
+      .enumerateDevices()
+      .then((devices) => {
+        // Filter for video input devices and add a "Default camera" option
+        const videoDevices = devices.filter(
+          (device) => device.kind === "videoinput"
+        );
+
+        // Add a default option that uses environment facing camera
+        const cameraOptions = [
+          { deviceId: "environment", label: "Default (Back Camera)" },
+          ...videoDevices,
+        ];
+
+        setCameras(cameraOptions);
+
+        // Select the environment option by default
+        setSelectedCamera("environment");
+
+        console.log("Available cameras:", cameraOptions);
+      })
+      .catch((error) => {
+        console.error("Error enumerating devices:", error);
+        setSnackbar({
+          open: true,
+          message: "Failed to detect cameras",
+          severity: "error",
+        });
+      });
+  };
+
+  const handleOpenQRScannerDialog = () => {
+    setOpenQRScannerDialog(true);
+    setScannerResult(null);
+    setManualQRInput("");
+    setShowDirectLoanInput(true); // Show direct loan input by default
+
+    // Get available camera devices when opening the dialog
+    getCameraDevices();
   };
 
   if (loading) {
@@ -1555,11 +2225,17 @@ const LoanManagement = () => {
       <Dialog
         open={openReceiptDialog}
         onClose={handleCloseReceiptDialog}
-        maxWidth="md"
+        maxWidth="sm"
         fullWidth
       >
         <DialogTitle>
-          <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
             <Typography variant="h6">Borrowing Receipt</Typography>
             <Button
               variant="contained"
@@ -1575,122 +2251,138 @@ const LoanManagement = () => {
           <Box ref={receiptRef} sx={{ p: 2 }}>
             <Box className="receipt">
               <Box className="receipt-header">
-                <Typography className="library-name" variant="h5">
+                <Typography className="library-name" variant="h6">
                   Hiraya Balanghay Library
                 </Typography>
-                <Typography className="receipt-title" variant="subtitle1">
+                <Typography className="receipt-title" variant="subtitle2">
                   Book Loan Receipt
                 </Typography>
               </Box>
-              
+
               <Grid container spacing={2}>
                 <Grid item xs={12} md={8}>
                   <Box className="member-details">
-                    <Typography variant="subtitle1" sx={{ fontWeight: "bold", mb: 1 }}>
+                    <Typography
+                      variant="subtitle2"
+                      sx={{ fontWeight: "bold", mb: 1 }}
+                    >
                       Member Information
                     </Typography>
-                    <Typography variant="body1">
-                      Name: {receiptData?.member?.name}
-                    </Typography>
-                    <Typography variant="body1">
-                      Email: {receiptData?.member?.email}
-                    </Typography>
-                    <Typography variant="body1">
-                      ID: {receiptData?.member?.id}
-                    </Typography>
+                    <Box className="detail-row">
+                      <Typography variant="body2">Name:</Typography>
+                      <Typography variant="body2">
+                        {receiptData?.member?.name}
+                      </Typography>
+                    </Box>
+                    <Box className="detail-row">
+                      <Typography variant="body2">ID:</Typography>
+                      <Typography variant="body2">
+                        {receiptData?.member?.id}
+                      </Typography>
+                    </Box>
                   </Box>
-                  
-                  <Box className="loan-details">
-                    <Typography variant="subtitle1" sx={{ fontWeight: "bold", mb: 1 }}>
+
+                  <Box className="loan-details" sx={{ mt: 2 }}>
+                    <Typography
+                      variant="subtitle2"
+                      sx={{ fontWeight: "bold", mb: 1 }}
+                    >
                       Loan Information
                     </Typography>
-                    <Typography variant="body1">
-                      Transaction ID: {receiptData?.transactionId}
-                    </Typography>
-                    <Typography variant="body1">
-                      Checkout Date: {formatDate(receiptData?.checkoutDate)}
-                    </Typography>
-                    <Typography variant="body1" className="due-date">
-                      Due Date: {formatDate(receiptData?.dueDate)}
-                    </Typography>
-                    <Typography variant="body2" sx={{ mt: 1, color: "text.secondary" }}>
-                      Please return all items by the due date to avoid fines.
-                    </Typography>
+                    <Box className="detail-row">
+                      <Typography variant="body2">Transaction:</Typography>
+                      <Typography variant="body2">
+                        {receiptData?.transactionId?.split("-")[1]}
+                      </Typography>
+                    </Box>
+                    <Box className="detail-row">
+                      <Typography variant="body2">Checkout:</Typography>
+                      <Typography variant="body2">
+                        {formatDate(receiptData?.checkoutDate)}
+                      </Typography>
+                    </Box>
+                    <Box className="detail-row">
+                      <Typography variant="body2">Due Date:</Typography>
+                      <Typography variant="body2" className="due-date">
+                        {formatDate(receiptData?.dueDate)}
+                      </Typography>
+                    </Box>
                   </Box>
                 </Grid>
                 <Grid item xs={12} md={4}>
                   <Box className="qr-section">
-                    <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                      <QrCodeIcon sx={{ fontSize: 40, mb: 1, color: "primary.main" }} />
-                      {receiptData && (
+                    <Box
+                      sx={{
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                      }}
+                    >
+                      {qrCodeData && (
                         <Box
                           component="img"
-                          src={generateQRData(receiptData)}
+                          src={qrCodeData}
                           alt="Loan QR Code"
-                          sx={{ 
-                            width: 150,
-                            height: 150,
+                          sx={{
+                            width: 120,
+                            height: 120,
                             border: "1px solid #eee",
                             borderRadius: 1,
                             p: 1,
                           }}
                         />
                       )}
-                      <Typography variant="caption" sx={{ mt: 1, fontStyle: "italic" }}>
+                      <Typography
+                        variant="caption"
+                        sx={{ mt: 1, fontStyle: "italic" }}
+                      >
                         Scan for quick return
                       </Typography>
                     </Box>
                   </Box>
                 </Grid>
               </Grid>
-              
+
               <Divider sx={{ my: 2 }} />
-              
-              <Typography variant="subtitle1" sx={{ fontWeight: "bold", mb: 1 }}>
+
+              <Typography
+                variant="subtitle2"
+                sx={{ fontWeight: "bold", mb: 1 }}
+              >
                 Borrowed Items ({receiptData?.books?.length || 0})
               </Typography>
-              
+
               <TableContainer component={Paper} variant="outlined">
                 <Table size="small">
                   <TableHead>
                     <TableRow>
-                      <TableCell>Item</TableCell>
-                      <TableCell>Title</TableCell>
-                      <TableCell>Author</TableCell>
-                      <TableCell>ISBN</TableCell>
+                      <TableCell padding="none" sx={{ pl: 1 }}>
+                        Title
+                      </TableCell>
+                      <TableCell padding="none">Author</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {receiptData?.books?.map((book, index) => (
+                    {receiptData?.books?.map((book) => (
                       <TableRow key={book.id}>
-                        <TableCell>{index + 1}</TableCell>
-                        <TableCell>{book.title}</TableCell>
-                        <TableCell>{book.author}</TableCell>
-                        <TableCell>{book.isbn || "N/A"}</TableCell>
+                        <TableCell padding="none" sx={{ pl: 1 }}>
+                          {book.title}
+                        </TableCell>
+                        <TableCell padding="none">{book.author}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
               </TableContainer>
-              
-              <Box className="footer" sx={{ mt: 4, textAlign: "center" }}>
+
+              <Box className="footer">
                 <Typography variant="body2" sx={{ mb: 1 }}>
                   Thank you for using Hiraya Balanghay Library!
                 </Typography>
                 <Typography variant="body2" sx={{ fontStyle: "italic" }}>
-                  Please keep this receipt for your records.
+                  Please keep this receipt and return by:{" "}
+                  {formatDate(receiptData?.dueDate)}
                 </Typography>
-              </Box>
-              
-              <Box sx={{ display: "flex", justifyContent: "space-between", mt: 4 }}>
-                <Box sx={{ textAlign: "center" }}>
-                  <Typography className="signature-line">&nbsp;</Typography>
-                  <Typography variant="body2">Librarian Signature</Typography>
-                </Box>
-                <Box sx={{ textAlign: "center" }}>
-                  <Typography className="signature-line">&nbsp;</Typography>
-                  <Typography variant="body2">Member Signature</Typography>
-                </Box>
               </Box>
             </Box>
           </Box>
@@ -1704,61 +2396,145 @@ const LoanManagement = () => {
       <Dialog
         open={openQRScannerDialog}
         onClose={handleCloseQRScannerDialog}
-        maxWidth="sm"
+        maxWidth="md"
         fullWidth
       >
         <DialogTitle>
-          <Typography variant="h6">Scan Return QR Code</Typography>
+          <Typography variant="h6">Return Books</Typography>
         </DialogTitle>
         <DialogContent>
-          <Box sx={{ textAlign: "center", py: 2 }}>
-            {!qrScannerActive && !scannerResult && (
-              <Box sx={{ mb: 2 }}>
-                <QrCodeScannerIcon 
-                  sx={{ fontSize: 60, color: "primary.main", mb: 2 }} 
-                />
-                <Typography variant="body1">
-                  Scan a QR code from a loan receipt to quickly return books.
-                </Typography>
-              </Box>
-            )}
-            
-            {scannerResult && (
-              <Box sx={{ mb: 2, mt: 2 }}>
-                <Typography 
-                  variant="subtitle1" 
-                  color={scannerResult.includes("Error") ? "error" : "success.main"}
-                  sx={{ fontWeight: "medium", mb: 1 }}
+          <Box sx={{ py: 2 }}>
+            {/* Direct Loan ID input section - more prominent */}
+            <Paper
+              variant="outlined"
+              sx={{
+                p: 3,
+                mb: 3,
+                bgcolor: "#f8f9fa",
+                border: "1px solid #e0e0e0",
+              }}
+            >
+              <Typography variant="subtitle1" fontWeight="bold" gutterBottom>
+                Quick Return by Loan ID
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Enter the loan ID number to quickly return books without
+                scanning:
+              </Typography>
+              <Grid container spacing={2} alignItems="center">
+                <Grid item xs={12} sm={8}>
+                  <TextField
+                    fullWidth
+                    size="medium"
+                    variant="outlined"
+                    label="Loan ID"
+                    placeholder="Enter loan ID number"
+                    value={directLoanId}
+                    onChange={(e) => setDirectLoanId(e.target.value)}
+                    InputProps={{
+                      startAdornment: (
+                        <InputAdornment position="start">
+                          <ReturnIcon />
+                        </InputAdornment>
+                      ),
+                    }}
+                    helperText="You can find the loan ID in active loans table"
+                  />
+                </Grid>
+                <Grid item xs={12} sm={4}>
+                  <Button
+                    fullWidth
+                    variant="contained"
+                    color="primary"
+                    size="large"
+                    onClick={handleDirectLoanReturn}
+                    disabled={
+                      !directLoanId.trim() || !/^\d+$/.test(directLoanId.trim())
+                    }
+                    sx={{ height: "56px" }}
+                  >
+                    Return Book
+                  </Button>
+                </Grid>
+              </Grid>
+            </Paper>
+
+            <Divider sx={{ my: 3, borderStyle: "dashed" }}>
+              <Chip label="OR" />
+            </Divider>
+
+            <Typography
+              variant="subtitle1"
+              fontWeight="bold"
+              gutterBottom
+              align="center"
+            >
+              Return Books by QR Code
+            </Typography>
+
+            {/* Camera selection dropdown */}
+            <Grid container spacing={2} sx={{ mb: 2 }}>
+              <Grid item xs={12} md={8}>
+                <FormControl variant="outlined" size="small" fullWidth>
+                  <InputLabel>Camera</InputLabel>
+                  <Select
+                    value={selectedCamera}
+                    onChange={handleCameraChange}
+                    label="Camera"
+                    disabled={qrScannerActive}
+                  >
+                    {cameras.map((camera, index) => (
+                      <MenuItem
+                        key={camera.deviceId || index}
+                        value={camera.deviceId}
+                      >
+                        {camera.label || `Camera ${index + 1}`}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <Button
+                  variant="outlined"
+                  fullWidth
+                  onClick={getCameraDevices}
+                  disabled={qrScannerActive}
                 >
-                  {scannerResult}
-                </Typography>
-              </Box>
-            )}
-            
-            <Box 
-              sx={{ 
-                position: "relative", 
-                width: "100%", 
-                maxWidth: 300,
-                height: 300,
+                  Refresh Cameras
+                </Button>
+              </Grid>
+            </Grid>
+
+            {/* Camera view or instruction */}
+            <Box
+              sx={{
+                position: "relative",
+                width: "100%",
+                maxWidth: 400,
+                height: 400,
                 margin: "0 auto",
                 display: qrScannerActive ? "block" : "none",
                 border: "2px solid #ccc",
                 borderRadius: 2,
-                overflow: "hidden"
+                overflow: "hidden",
               }}
             >
-              <video 
+              <video
                 ref={videoRef}
                 autoPlay
                 playsInline
                 muted
-                style={{ 
-                  width: "100%", 
-                  height: "100%", 
-                  objectFit: "cover" 
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
                 }}
               />
+              {/* Hidden canvas for image processing */}
+              <canvas ref={canvasRef} style={{ display: "none" }} />
+
+              {/* Scanner visualization overlay */}
               <Box
                 sx={{
                   position: "absolute",
@@ -1766,47 +2542,280 @@ const LoanManagement = () => {
                   left: 0,
                   right: 0,
                   bottom: 0,
-                  border: "40px solid rgba(0,0,0,0.3)",
-                  boxSizing: "border-box",
-                  "&::after": {
-                    content: '""',
-                    position: "absolute",
-                    top: "50%",
-                    left: "50%",
-                    width: "65%",
-                    height: "65%",
-                    transform: "translate(-50%, -50%)",
-                    border: "2px solid #4caf50",
-                    borderRadius: 2,
-                  }
+                  pointerEvents: "none",
                 }}
-              />
+              >
+                {/* Corner brackets for scanner targeting aid */}
+                <Box
+                  sx={{
+                    position: "absolute",
+                    top: "20%",
+                    left: "20%",
+                    width: "60%",
+                    height: "60%",
+                    border: "2px solid rgba(76, 175, 80, 0.8)",
+                    borderRadius: 1,
+                    boxShadow: "0 0 0 4000px rgba(0, 0, 0, 0.4)",
+                    "&::before, &::after, & > :nth-of-type(1)::before, & > :nth-of-type(1)::after":
+                      {
+                        content: '""',
+                        position: "absolute",
+                        width: 20,
+                        height: 20,
+                        borderColor: "#4caf50",
+                        borderStyle: "solid",
+                        borderWidth: 0,
+                      },
+                    // Top left corner
+                    "&::before": {
+                      top: -2,
+                      left: -2,
+                      borderTopWidth: 4,
+                      borderLeftWidth: 4,
+                      borderTopLeftRadius: 4,
+                    },
+                    // Top right corner
+                    "&::after": {
+                      top: -2,
+                      right: -2,
+                      borderTopWidth: 4,
+                      borderRightWidth: 4,
+                      borderTopRightRadius: 4,
+                    },
+                  }}
+                >
+                  <Box
+                    sx={{
+                      position: "absolute",
+                      width: "100%",
+                      height: "100%",
+                      // Bottom left corner
+                      "&::before": {
+                        bottom: -2,
+                        left: -2,
+                        borderBottomWidth: 4,
+                        borderLeftWidth: 4,
+                        borderBottomLeftRadius: 4,
+                      },
+                      // Bottom right corner
+                      "&::after": {
+                        bottom: -2,
+                        right: -2,
+                        borderBottomWidth: 4,
+                        borderRightWidth: 4,
+                        borderBottomRightRadius: 4,
+                      },
+                    }}
+                  />
+                </Box>
+
+                {/* Laser animation */}
+                <Box
+                  sx={{
+                    position: "absolute",
+                    top: "20%",
+                    left: "20%",
+                    width: "60%",
+                    height: 2,
+                    backgroundColor: "rgba(255, 0, 0, 0.7)",
+                    boxShadow: "0 0 8px rgba(255, 0, 0, 0.9)",
+                    animation: "scannerAnimation 2s linear infinite",
+                    "@keyframes scannerAnimation": {
+                      "0%": {
+                        top: "20%",
+                      },
+                      "50%": {
+                        top: "80%",
+                      },
+                      "100%": {
+                        top: "20%",
+                      },
+                    },
+                  }}
+                />
+
+                {/* Scan instructions overlay */}
+                <Typography
+                  variant="caption"
+                  sx={{
+                    position: "absolute",
+                    bottom: 50,
+                    left: 0,
+                    right: 0,
+                    color: "#fff",
+                    textAlign: "center",
+                    background: "rgba(0,0,0,0.5)",
+                    padding: "4px 0",
+                  }}
+                >
+                  Hold steady, ensure good lighting
+                </Typography>
+
+                {/* Flashlight toggle button */}
+                {torchAvailable && (
+                  <IconButton
+                    onClick={toggleTorch}
+                    sx={{
+                      position: "absolute",
+                      bottom: 10,
+                      right: 10,
+                      backgroundColor: "rgba(0, 0, 0, 0.6)",
+                      color: "white",
+                      "&:hover": {
+                        backgroundColor: "rgba(0, 0, 0, 0.8)",
+                      },
+                      pointerEvents: "auto",
+                    }}
+                    size="small"
+                  >
+                    {torchActive ? <FlashOffIcon /> : <FlashOnIcon />}
+                  </IconButton>
+                )}
+              </Box>
             </Box>
+
+            {!qrScannerActive && !scannerResult && (
+              <Box sx={{ mb: 2, textAlign: "center" }}>
+                <QrCodeScannerIcon
+                  sx={{ fontSize: 60, color: "primary.main", mb: 2 }}
+                />
+                <Typography variant="body1">
+                  Scan a QR code from a loan receipt to quickly return books.
+                </Typography>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<QrCodeScannerIcon />}
+                  onClick={startQRScanner}
+                  disabled={cameras.length === 0}
+                  sx={{ mt: 2 }}
+                >
+                  Start Scanning
+                </Button>
+              </Box>
+            )}
+
+            {/* Result message */}
+            {scannerResult && (
+              <Box sx={{ mb: 2, mt: 2, textAlign: "center" }}>
+                <Typography
+                  variant="subtitle1"
+                  color={
+                    scannerResult.includes("Error")
+                      ? "error"
+                      : scannerResult.includes("Processing")
+                      ? "primary.main"
+                      : scannerResult.includes("Camera") ||
+                        scannerResult.includes("Scanning")
+                      ? "text.secondary"
+                      : "success.main"
+                  }
+                  sx={{ fontWeight: "medium", mb: 1 }}
+                >
+                  {scannerResult}
+                </Typography>
+              </Box>
+            )}
+
+            {/* Manual QR code entry form */}
+            <Paper variant="outlined" sx={{ p: 2, mt: 3 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                Manual QR Code Entry
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mb: 2 }}
+              >
+                If scanning doesn't work, you can paste the entire QR code data
+                here:
+              </Typography>
+              <TextField
+                fullWidth
+                size="small"
+                variant="outlined"
+                label="Enter QR code data"
+                placeholder="Paste the QR code content here"
+                value={manualQRInput}
+                onChange={(e) => setManualQRInput(e.target.value)}
+                multiline
+                rows={3}
+                sx={{ mb: 1 }}
+              />
+              <Button
+                variant="contained"
+                color="primary"
+                onClick={handleManualQRSubmit}
+                disabled={manualQRInput.trim() === ""}
+              >
+                Process QR Data
+              </Button>
+            </Paper>
+
+            {/* Debug actions */}
+            {qrScannerActive && (
+              <Box sx={{ mt: 2, textAlign: "center" }}>
+                <Button
+                  variant="outlined"
+                  color="info"
+                  onClick={captureSnapshot}
+                  size="small"
+                  sx={{ mr: 1 }}
+                >
+                  Capture Snapshot
+                </Button>
+                <Button
+                  variant="outlined"
+                  color="error"
+                  onClick={stopQRScanner}
+                  size="small"
+                >
+                  Stop Scanning
+                </Button>
+              </Box>
+            )}
           </Box>
         </DialogContent>
         <DialogActions>
-          {!qrScannerActive && !scannerResult && (
-            <Button 
-              variant="contained" 
-              color="primary" 
-              startIcon={<QrCodeScannerIcon />}
-              onClick={startQRScanner}
-            >
-              Start Scanning
-            </Button>
+          <Button onClick={handleCloseQRScannerDialog}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Debug Image Dialog */}
+      <Dialog
+        open={showDebugImage}
+        onClose={() => setShowDebugImage(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle>Camera Snapshot</DialogTitle>
+        <DialogContent>
+          {debugImage && (
+            <Box sx={{ textAlign: "center" }}>
+              <img
+                src={debugImage}
+                alt="Camera snapshot"
+                style={{ maxWidth: "100%", maxHeight: "70vh" }}
+              />
+              <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                If your QR code is visible but not scanning, try different
+                lighting or holding the device more steadily.
+              </Typography>
+            </Box>
           )}
-          {qrScannerActive && (
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowDebugImage(false)}>Close</Button>
+          {debugImage && (
             <Button
-              variant="outlined"
-              color="error"
-              onClick={stopQRScanner}
+              component="a"
+              href={debugImage}
+              download="qr-scan-debug.png"
+              variant="contained"
             >
-              Stop Scanning
+              Download Image
             </Button>
           )}
-          <Button onClick={handleCloseQRScannerDialog}>
-            Close
-          </Button>
         </DialogActions>
       </Dialog>
 
