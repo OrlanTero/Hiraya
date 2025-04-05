@@ -1,5 +1,12 @@
 const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("node:path");
+const SettingsStore = require("./settings-store");
+const {
+  setupSocketServer,
+  broadcastEvent,
+  getConnectedClients,
+} = require("./socket-server");
+const { createApiServer } = require("./api-server");
 const {
   initDatabase,
   authenticate,
@@ -39,8 +46,70 @@ if (require("electron-squirrel-startup")) {
   app.quit();
 }
 
+// Initialize settings store
+const store = new SettingsStore({
+  schema: {
+    darkMode: {
+      type: "boolean",
+      default: false,
+    },
+    serverAddress: {
+      type: "string",
+      default: "http://localhost:3000",
+    },
+    apiAddress: {
+      type: "string",
+      default: "http://localhost:3001",
+    },
+    rememberUser: {
+      type: "boolean",
+      default: false,
+    },
+  },
+});
+
 let mainWindow;
 let splashScreen;
+let socketServer = { httpServer: null, io: null };
+let apiServer = null;
+const API_PORT = 3001;
+
+// Set up session configuration for the windows
+const configureSession = (session) => {
+  // Configure CORS settings
+  session.webRequest.onBeforeSendHeaders((details, callback) => {
+    const { requestHeaders } = details;
+
+    // Add CORS headers
+    requestHeaders["Origin"] = "electron://balanghay";
+
+    callback({ requestHeaders });
+  });
+
+  // Handle CORS preflight responses
+  session.webRequest.onHeadersReceived((details, callback) => {
+    const { responseHeaders } = details;
+
+    // Add or append CORS headers to responses
+    if (responseHeaders) {
+      responseHeaders["Access-Control-Allow-Origin"] = ["*"];
+      responseHeaders["Access-Control-Allow-Methods"] = [
+        "GET, POST, PUT, DELETE, OPTIONS",
+      ];
+      responseHeaders["Access-Control-Allow-Headers"] = [
+        "Origin, X-Requested-With, Content-Type, Accept, Authorization",
+      ];
+    }
+
+    callback({ responseHeaders });
+  });
+
+  // Set permission request handler
+  session.setPermissionRequestHandler((webContents, permission, callback) => {
+    // Allow all permission requests
+    callback(true);
+  });
+};
 
 const createWindow = () => {
   console.log("Creating main window and splash screen");
@@ -53,6 +122,8 @@ const createWindow = () => {
       preload: path.join(__dirname, "preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
     },
     icon: path.join(__dirname, "assets", "logo.png"),
     show: false, // Hide the window until it's ready
@@ -69,9 +140,45 @@ const createWindow = () => {
       preload: path.join(__dirname, "preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
     },
     icon: path.join(__dirname, "assets", "logo.png"),
   });
+
+  // Configure sessions
+  configureSession(mainWindow.webContents.session);
+  configureSession(splashScreen.webContents.session);
+
+  // Register permission handler to allow access to localhost:3001
+  mainWindow.webContents.session.setPermissionRequestHandler(
+    (webContents, permission, callback) => {
+      if (permission === "media" || permission === "geolocation") {
+        callback(true);
+      } else {
+        callback(true);
+      }
+    }
+  );
+
+  // Set same permission handler for splash screen
+  splashScreen.webContents.session.setPermissionRequestHandler(
+    (webContents, permission, callback) => {
+      callback(true);
+    }
+  );
+
+  // Allow CORS for specific domains
+  mainWindow.webContents.session.webRequest.onHeadersReceived(
+    (details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          "Access-Control-Allow-Origin": ["*"],
+        },
+      });
+    }
+  );
 
   // Load splash screen
   splashScreen.loadFile(path.join(__dirname, "index.html"));
@@ -133,6 +240,16 @@ const createWindow = () => {
 // Ensure React Devtools is available if in development mode
 app.whenReady().then(() => {
   console.log("Electron app ready, creating window");
+
+  // Set up Socket.io server
+  socketServer = setupSocketServer(3000);
+
+  // Set up API server
+  const apiApp = createApiServer(ipcMain, socketServer.io);
+  apiServer = apiApp.listen(API_PORT, () => {
+    console.log(`API server running on port ${API_PORT}`);
+  });
+
   createWindow();
 
   // Set up IPC handlers
@@ -152,6 +269,20 @@ app.whenReady().then(() => {
 // explicitly with Cmd + Q.
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
+    // Close the HTTP server if it exists
+    if (socketServer.httpServer) {
+      socketServer.httpServer.close(() => {
+        console.log("Socket.io HTTP server closed");
+      });
+    }
+
+    // Close the API server if it exists
+    if (apiServer) {
+      apiServer.close(() => {
+        console.log("API server closed");
+      });
+    }
+
     app.quit();
   }
 });
@@ -174,6 +305,46 @@ function setupIpcHandlers() {
   ipcMain.handle("auth:loginWithQR", async (event, { qr_auth_key }) => {
     console.log("Auth login with QR request received");
     return await authenticateWithQR(qr_auth_key);
+  });
+
+  // QR code scanning is now handled in api-server.js
+
+  // Settings handlers
+  ipcMain.handle("settings:get", async () => {
+    try {
+      return {
+        success: true,
+        settings: store.store,
+      };
+    } catch (error) {
+      console.error("Error getting settings:", error);
+      return {
+        success: false,
+        message: "Failed to get settings",
+        error: error.message,
+      };
+    }
+  });
+
+  ipcMain.handle("settings:save", async (event, settings) => {
+    try {
+      // Update only the provided settings
+      Object.keys(settings).forEach((key) => {
+        store.set(key, settings[key]);
+      });
+
+      return {
+        success: true,
+        settings: store.store,
+      };
+    } catch (error) {
+      console.error("Error saving settings:", error);
+      return {
+        success: false,
+        message: "Failed to save settings",
+        error: error.message,
+      };
+    }
   });
 
   // User Management
@@ -267,17 +438,50 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle("loans:borrow", async (event, memberData) => {
-    return await borrowBooks(memberData);
+    const result = await borrowBooks(memberData);
+
+    // Emit socket.io event for book borrowing if successful
+    if (result.success && socketServer.io) {
+      socketServer.io.emit("notification", {
+        type: "book_borrowed",
+        memberId: memberData.member_id,
+        bookIds: memberData.book_ids,
+        timestamp: new Date(),
+      });
+    }
+
+    return result;
   });
 
   ipcMain.handle("loans:return", async (event, loanIds) => {
-    return await returnBooks(loanIds);
+    const result = await returnBooks(loanIds);
+
+    // Emit socket.io event for book returning if successful
+    if (result.success && socketServer.io) {
+      socketServer.io.emit("notification", {
+        type: "book_returned",
+        loanIds: loanIds,
+        timestamp: new Date(),
+      });
+    }
+
+    return result;
   });
 
   // Add the new IPC handler for QR code returns
   ipcMain.handle("loans:returnViaQR", async (event, qrData) => {
     try {
       const result = await returnBooksViaQRCode(qrData);
+
+      // Emit socket.io event for book returning via QR if successful
+      if (result.success && socketServer.io) {
+        socketServer.io.emit("notification", {
+          type: "book_returned_qr",
+          qrData: qrData,
+          timestamp: new Date(),
+        });
+      }
+
       return result;
     } catch (error) {
       console.error("Error in loans:returnViaQR:", error);
@@ -286,6 +490,15 @@ function setupIpcHandlers() {
         message: error.message || "Failed to return books via QR code",
       };
     }
+  });
+
+  // Socket.io related IPC handlers
+  ipcMain.handle("socket:getClients", () => {
+    return getConnectedClients();
+  });
+
+  ipcMain.handle("socket:broadcast", (event, { eventName, data }) => {
+    return broadcastEvent(socketServer.io, eventName, data);
   });
 }
 
