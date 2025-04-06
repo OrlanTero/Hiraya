@@ -101,8 +101,25 @@ const MemberProfile = () => {
     const tab = params.get("tab");
     if (tab === "loans") {
       setTabValue(1);
+
+      // Check if there's a loan_id parameter for auto-opening the return dialog
+      const loanId = params.get("loan_id");
+      if (loanId && loans.length > 0) {
+        console.log("Found loan_id in URL:", loanId);
+
+        // Find the loan by ID
+        const loanToReturn = loans.find(
+          (loan) => loan.id.toString() === loanId.toString()
+        );
+
+        if (loanToReturn) {
+          console.log("Found loan to return:", loanToReturn);
+          setSelectedLoan(loanToReturn);
+          setReturnDialogOpen(true);
+        }
+      }
     }
-  }, [location]);
+  }, [location, loans]);
 
   // Fetch profile data function wrapped in useCallback for reuse
   const fetchProfileData = React.useCallback(async () => {
@@ -115,12 +132,26 @@ const MemberProfile = () => {
       setLoading(true);
       console.log("Fetching member profile and loans data...");
 
+      // Parse ID to integer if it's a string
+      let userId = currentUser.id;
+      if (typeof userId === "string") {
+        const numericId = parseInt(userId, 10);
+        if (!isNaN(numericId)) {
+          console.log(
+            `Converting user ID from string ${userId} to number ${numericId}`
+          );
+          userId = numericId;
+        }
+      }
+
+      console.log("Using user ID for profile lookup:", userId, typeof userId);
+
       // Get member profile
-      const memberProfile = await window.api.getMemberProfile(currentUser.id);
+      const memberProfile = await window.api.getMemberProfile(userId);
       setProfile(memberProfile);
 
       // Get loans
-      const loanData = await window.api.getLoansByMember(currentUser.id);
+      const loanData = await window.api.getLoansByMember(userId);
       console.log("Received loans data:", loanData);
 
       setLoans(loanData);

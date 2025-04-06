@@ -38,6 +38,7 @@ import {
   Notifications as NotificationsIcon,
   DarkMode as DarkModeIcon,
   LightMode as LightModeIcon,
+  Warning as WarningIcon,
 } from "@mui/icons-material";
 import { useAuth } from "../contexts/AuthContext";
 
@@ -134,6 +135,8 @@ const Dashboard = ({ darkMode, toggleDarkMode }) => {
   const [loading, setLoading] = useState(true);
   const [userData, setUserData] = useState(null);
   const [activeLoans, setActiveLoans] = useState([]);
+  const [pastLoans, setPastLoans] = useState([]);
+  const [overdueLoans, setOverdueLoans] = useState([]);
   const [bookCount, setBookCount] = useState(0);
 
   // CRITICAL FIX: Attempt to restore authentication state from sessionStorage on component mount
@@ -279,7 +282,22 @@ const Dashboard = ({ darkMode, toggleDarkMode }) => {
           return;
         }
 
-        console.log("Dashboard - Fetching data with userId:", userId);
+        // Parse ID to integer if it's a string
+        if (typeof userId === "string") {
+          const numericId = parseInt(userId, 10);
+          if (!isNaN(numericId)) {
+            console.log(
+              `Dashboard - Converting user ID from string ${userId} to number ${numericId}`
+            );
+            userId = numericId;
+          }
+        }
+
+        console.log(
+          "Dashboard - Fetching data with userId:",
+          userId,
+          typeof userId
+        );
 
         // Get member profile
         let memberProfile;
@@ -291,12 +309,33 @@ const Dashboard = ({ darkMode, toggleDarkMode }) => {
           console.error("Error fetching member profile:", error);
         }
 
-        // Get active loans
+        // Get loans
         try {
-          const loans = await window.api.getLoansByMember(userId);
-          console.log("Dashboard - Got loans:", loans);
-          const active = loans.filter((loan) => !loan.return_date);
+          const loanData = await window.api.getLoansByMember(userId);
+          console.log("Dashboard - Got loans:", loanData);
+
+          // Separate active and overdue loans
+          const currentDate = new Date();
+          const active = [];
+          const overdue = [];
+
+          loanData
+            .filter((loan) => !loan.return_date)
+            .forEach((loan) => {
+              const dueDate = new Date(loan.due_date);
+              if (dueDate < currentDate) {
+                overdue.push(loan);
+              } else {
+                active.push(loan);
+              }
+            });
+
           setActiveLoans(active);
+          setOverdueLoans(overdue);
+
+          // Set past loans (returned books)
+          const past = loanData.filter((loan) => loan.return_date);
+          setPastLoans(past);
         } catch (error) {
           console.error("Error fetching loans:", error);
         }
@@ -351,7 +390,7 @@ const Dashboard = ({ darkMode, toggleDarkMode }) => {
   };
 
   const handleViewLoans = () => {
-    navigate("/profile?tab=loans");
+    navigate("/loans");
   };
 
   if (loading) {
@@ -518,6 +557,16 @@ const Dashboard = ({ darkMode, toggleDarkMode }) => {
             </Grid>
             <Grid item xs={12} md={6} lg={3}>
               <DashboardCard
+                title="Overdue Books"
+                icon={<WarningIcon />}
+                description="Books that need to be returned"
+                count={overdueLoans.length}
+                onClick={() => navigate("/loans?tab=overdue")}
+                color="#f44336"
+              />
+            </Grid>
+            <Grid item xs={12} md={6} lg={3}>
+              <DashboardCard
                 title="Book Catalog"
                 icon={<LibraryBooksIcon />}
                 description="Browse all available books"
@@ -540,6 +589,7 @@ const Dashboard = ({ darkMode, toggleDarkMode }) => {
                 title="Reading History"
                 icon={<HistoryIcon />}
                 description="Books you've previously borrowed"
+                count={pastLoans ? pastLoans.length : 0}
                 onClick={handleViewLoans}
                 color="#7b1fa2"
               />
@@ -595,6 +645,74 @@ const Dashboard = ({ darkMode, toggleDarkMode }) => {
                   startIcon={<HistoryIcon />}
                 >
                   View All Loans
+                </Button>
+              </Box>
+            </Box>
+          )}
+
+          {overdueLoans.length > 0 && (
+            <Box sx={{ mt: 4 }}>
+              <Typography variant="h5" color="error" gutterBottom>
+                Overdue Books
+              </Typography>
+              <Grid container spacing={2}>
+                {overdueLoans.map((loan) => (
+                  <Grid item xs={12} sm={6} md={4} key={loan.id}>
+                    <Card
+                      sx={{
+                        display: "flex",
+                        height: "100%",
+                        borderLeft: "4px solid #f44336",
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          width: 80,
+                          backgroundColor: loan.book_color || "#6B4226",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                        }}
+                      >
+                        {loan.book_cover ? (
+                          <CardMedia
+                            component="img"
+                            sx={{ width: 80 }}
+                            image={loan.book_cover}
+                            alt={loan.book_title}
+                          />
+                        ) : (
+                          <BookIcon sx={{ fontSize: 40, color: "white" }} />
+                        )}
+                      </Box>
+                      <CardContent sx={{ flexGrow: 1 }}>
+                        <Typography variant="subtitle1" component="div">
+                          {loan.book_title}
+                        </Typography>
+                        <Typography variant="body2" color="error">
+                          Due: {new Date(loan.due_date).toLocaleDateString()}
+                        </Typography>
+                        <Button
+                          size="small"
+                          color="error"
+                          sx={{ mt: 1 }}
+                          onClick={() => navigate("/loans?tab=overdue")}
+                        >
+                          Return Now
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  </Grid>
+                ))}
+              </Grid>
+              <Box sx={{ mt: 2, display: "flex", justifyContent: "flex-end" }}>
+                <Button
+                  variant="outlined"
+                  color="error"
+                  onClick={() => navigate("/loans?tab=overdue")}
+                  startIcon={<WarningIcon />}
+                >
+                  View All Overdue Books
                 </Button>
               </Box>
             </Box>

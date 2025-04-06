@@ -19,6 +19,7 @@ import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import BookCatalog from "./pages/BookCatalog";
 import MemberProfile from "./pages/MemberProfile";
+import LoanHistory from "./pages/LoanHistory";
 
 // Context for application state
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
@@ -272,6 +273,14 @@ const App = () => {
                 element={
                   <ProtectedRoute>
                     <MemberProfile />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/loans"
+                element={
+                  <ProtectedRoute>
+                    <LoanHistory />
                   </ProtectedRoute>
                 }
               />

@@ -358,25 +358,42 @@ function createApiServer(ipcMain, socketServer) {
   // Member endpoints
   app.get("/api/members/:id", async (req, res) => {
     const memberId = req.params.id;
-    console.log(`Getting member with ID ${memberId}`);
+    console.log(
+      `Getting member with ID: ${memberId} (type: ${typeof memberId})`
+    );
 
     try {
-      const member = await getMemberById(memberId);
+      // Check if the ID is a numeric string and convert it
+      let parsedId = memberId;
 
-      if (member) {
-        res.json(member);
-      } else {
-        res.status(404).json({
-          success: false,
-          message: "Member not found",
-        });
+      if (typeof memberId === "string") {
+        // Try to parse as integer first
+        const numericId = parseInt(memberId, 10);
+        if (!isNaN(numericId)) {
+          console.log(
+            `Converted string ID '${memberId}' to numeric ID ${numericId}`
+          );
+          parsedId = numericId;
+        }
       }
+
+      console.log(
+        `Querying database with member ID ${parsedId} (type: ${typeof parsedId})`
+      );
+      const member = await getMemberById(parsedId);
+
+      if (!member) {
+        return res
+          .status(404)
+          .json({ success: false, message: "Member not found" });
+      }
+
+      res.json(member);
     } catch (error) {
-      console.error(`Error fetching member ${memberId}:`, error);
+      console.error(`Error getting member with ID ${memberId}:`, error);
       res.status(500).json({
         success: false,
-        message: "Failed to fetch member",
-        error: error.message,
+        message: `Error retrieving member: ${error.message}`,
       });
     }
   });
@@ -384,10 +401,38 @@ function createApiServer(ipcMain, socketServer) {
   // Loan endpoints
   app.get("/api/loans/member/:id", async (req, res) => {
     const memberId = req.params.id;
-    console.log(`Getting loans for member ${memberId}`);
+    console.log(
+      `Getting loans for member ${memberId} (type: ${typeof memberId})`
+    );
 
     try {
-      const loans = await getLoansByMember(memberId);
+      // Attempt to parse the ID to an integer if it's a string
+      let parsedId = memberId;
+
+      // If the ID is a string (it usually is from URL params), try to parse it
+      if (typeof memberId === "string") {
+        const numericId = parseInt(memberId, 10);
+        if (!isNaN(numericId)) {
+          console.log(
+            `Converted string ID '${memberId}' to numeric ID ${numericId}`
+          );
+          parsedId = numericId;
+        }
+      }
+
+      console.log(
+        `Querying database with member ID ${parsedId} (type: ${typeof parsedId})`
+      );
+      const loans = await getLoansByMember(parsedId);
+
+      // Log more details about the loans found
+      console.log(`Found ${loans.length} loans for member ${memberId}`);
+      if (loans.length > 0) {
+        console.log(
+          `Sample loan: ID=${loans[0].id}, Book=${loans[0].book_title}`
+        );
+      }
+
       res.json(loans);
     } catch (error) {
       console.error(`Error fetching loans for member ${memberId}:`, error);

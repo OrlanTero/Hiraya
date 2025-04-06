@@ -386,7 +386,35 @@ const updateBook = (id, book) =>
 const deleteBook = (id) => db("books").where({ id }).del();
 
 const getAllMembers = () => db("members").select("*");
-const getMemberById = (id) => db("members").where({ id }).first();
+const getMemberById = (id) => {
+  console.log(`DB: Getting member with ID: ${id}, type: ${typeof id}`);
+
+  // Convert to number if it's a string and can be parsed
+  let parsedId = id;
+  if (typeof id === "string") {
+    const numeric = parseInt(id, 10);
+    if (!isNaN(numeric)) {
+      parsedId = numeric;
+      console.log(`DB: Converted string ID '${id}' to numeric ID: ${parsedId}`);
+    }
+  }
+
+  return db("members")
+    .where({ id: parsedId })
+    .first()
+    .then((member) => {
+      console.log(
+        member
+          ? `DB: Found member: ${member.name}`
+          : `DB: No member found with ID ${parsedId}`
+      );
+      return member;
+    })
+    .catch((err) => {
+      console.error(`DB: Error fetching member with ID ${parsedId}:`, err);
+      throw err;
+    });
+};
 const addMember = (member) => db("members").insert(member).returning("*");
 const updateMember = (id, member) =>
   db("members").where({ id }).update(member).returning("*");
@@ -406,11 +434,28 @@ const getAllLoans = () =>
       "members.email as member_email"
     );
 
-const getLoansByMember = (memberId) =>
-  db("loans")
+const getLoansByMember = (memberId) => {
+  console.log(
+    `DB: Getting loans for member ID: ${memberId}, type: ${typeof memberId}`
+  );
+
+  // Convert to number if it's a string and can be parsed
+  let id = memberId;
+  if (typeof memberId === "string") {
+    const parsed = parseInt(memberId, 10);
+    if (!isNaN(parsed)) {
+      id = parsed;
+      console.log(`DB: Converted string ID '${memberId}' to numeric ID: ${id}`);
+    }
+  }
+
+  id = id.toString().replace("member-", "");
+  id = parseInt(id, 10);
+
+  return db("loans")
     .join("books", "loans.book_id", "books.id")
     .join("members", "loans.member_id", "members.id")
-    .where("loans.member_id", memberId)
+    .where("loans.member_id", id)
     .select(
       "loans.*",
       "books.title as book_title",
@@ -419,7 +464,16 @@ const getLoansByMember = (memberId) =>
       "books.cover_color as book_color",
       "members.name as member_name",
       "members.email as member_email"
-    );
+    )
+    .then((loans) => {
+      console.log(`DB: Found ${loans.length} loans for member ID ${id}`);
+      return loans;
+    })
+    .catch((err) => {
+      console.error(`DB: Error fetching loans for member ID ${id}:`, err);
+      throw err;
+    });
+};
 
 const getActiveLoans = () =>
   db("loans")

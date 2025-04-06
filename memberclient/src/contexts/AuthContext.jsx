@@ -14,6 +14,7 @@ export function AuthProvider({ children }) {
   const [storedUser, setStoredUser] = useLocalStorage("user", null);
   const [storedSession, setStoredSession] = useLocalStorage("session", null);
   const { apiRequest, serverStatus } = useServer();
+  const [error, setError] = useState(null);
 
   // Check for stored session on mount
   useEffect(() => {
@@ -92,142 +93,59 @@ export function AuthProvider({ children }) {
   };
 
   // Login with credentials
-  const login = async (email, pin) => {
+  const login = async (credentials) => {
     try {
       setLoading(true);
-      console.log("AuthContext login called with:", {
-        hasEmail: !!email,
-        emailType: typeof email,
-        hasPIN: !!pin,
-        pinLength: pin ? pin.length : 0,
+      setError(null);
+
+      console.log("AuthContext - Attempting login with credentials", {
+        ...credentials,
+        password: credentials.password ? "[REDACTED]" : undefined,
       });
 
-      let response = null;
+      const response = await window.api.login(credentials);
+      console.log("AuthContext - Login response:", response);
 
-      // Try IPC methods first (preferred)
-      if (window.electronAPI?.auth?.login) {
-        console.log("Using electronAPI.auth.login");
-        try {
-          response = await window.electronAPI.auth.login({
-            email: email,
-            pin: pin,
-          });
-          console.log("electronAPI.auth.login response:", response);
-        } catch (ipcError) {
-          console.error("IPC login error:", ipcError);
-          // Don't throw, try other methods
-        }
-      }
-
-      // Try legacy IPC if modern failed
-      if (!response && window.api?.login) {
-        console.log("Using legacy api.login");
-        try {
-          response = await window.api.login({
-            email: email,
-            pin: pin,
-          });
-          console.log("legacy api.login response:", response);
-        } catch (legacyError) {
-          console.error("Legacy IPC login error:", legacyError);
-          // Don't throw, try API method
-        }
-      }
-
-      // Last resort: use API
-      if (!response && serverStatus.apiConnected) {
-        console.log("Using API /api/auth/login");
-        try {
-          // Create login payload
-          const loginPayload = { email, pin };
-
-          // Make login request
-          response = await apiRequest("/api/auth/login", {
-            method: "POST",
-            body: JSON.stringify(loginPayload),
-          });
-          console.log("API login response:", response);
-        } catch (apiError) {
-          console.error("API login error:", apiError);
-          // Don't throw, we'll handle below
-        }
-      }
-
-      // Handle the response (whichever method succeeded)
-      if (response && response.success && response.user) {
-        console.log(
-          "Login successful:",
-          response.user.username || response.user.email
-        );
-
-        // Debug log before setting currentUser
-        console.log("Before setCurrentUser call, current value:", currentUser);
-
-        // Set authenticated flag immediately
-        setIsAuthenticated(true);
-        console.log("Setting isAuthenticated to true");
-
-        // Save user to state
-        setCurrentUser(response.user);
-
-        // Debug log after setCurrentUser call
-        console.log("After setCurrentUser call with:", response.user);
-
-        // Store user and session if "remember me" is enabled
-        if (rememberMe) {
-          setStoredUser(response.user);
-          if (response.session) {
-            setStoredSession(response.session);
+      if (response.success) {
+        // Ensure user ID is stored as a number if it's a numeric string
+        if (response.user && typeof response.user.id === "string") {
+          const numericId = parseInt(response.user.id, 10);
+          if (!isNaN(numericId)) {
+            console.log(
+              `Converting user ID from string ${response.user.id} to number ${numericId}`
+            );
+            response.user.id = numericId;
           }
+        }
+
+        console.log(
+          "AuthContext - Login successful, setting authenticated state"
+        );
+        setCurrentUser(response.user);
+        setIsAuthenticated(true);
+
+        // Store auth status in sessionStorage as fallback (used by ProtectedRoute)
+        try {
+          sessionStorage.setItem("isAuthenticated", "true");
+          sessionStorage.setItem(
+            "authenticatedUser",
+            JSON.stringify(response.user)
+          );
+          console.log("AuthContext - Stored auth in sessionStorage");
+        } catch (storageError) {
+          console.error("Error storing auth in sessionStorage:", storageError);
         }
 
         return { success: true, user: response.user };
       } else {
-        console.log("Login failed:", response?.message || "Unknown reason");
-        return {
-          success: false,
-          message:
-            (response && response.message) ||
-            "Login failed. Please check your credentials.",
-        };
+        console.log("AuthContext - Login failed:", response.message);
+        setError(response.message || "Login failed");
+        return { success: false, message: response.message };
       }
     } catch (error) {
-      console.error("Login error:", error);
-
-      // Fallback for offline mode (development testing only)
-      if (
-        !serverStatus.apiConnected &&
-        process.env.NODE_ENV === "development"
-      ) {
-        console.warn(
-          "DEVELOPMENT MODE: Using mock authentication in offline mode"
-        );
-
-        // Mock login for testing (remove in production)
-        const mockUser = {
-          id: "dev-12345",
-          name: "Test User",
-          username: email || "test@example.com",
-          email: email || "test@example.com",
-          role: "member",
-        };
-
-        setCurrentUser(mockUser);
-
-        if (rememberMe) {
-          setStoredUser(mockUser);
-          setStoredSession({ id: "mock-session-id" });
-        }
-
-        return { success: true, user: mockUser };
-      }
-
-      return {
-        success: false,
-        message: `Login failed: ${
-          error.message || "Connection error. Please try again."
-        }`,
-      };
+      console.error("AuthContext - Login error:", error);
+      setError(error.message || "An unexpected error occurred");
+      return { success: false, message: error.message };
     } finally {
       setLoading(false);
     }

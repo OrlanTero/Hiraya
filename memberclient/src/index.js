@@ -307,8 +307,23 @@ const setupIpcHandlers = () => {
   // Loans
   ipcMain.handle("loans:getByMember", async (event, memberId) => {
     try {
-      console.log(`Fetching loans for member ${memberId}...`);
-      const response = await serverAPI.get(`/api/loans/member/${memberId}`);
+      console.log(
+        `Fetching loans for member ${memberId} (type: ${typeof memberId})...`
+      );
+
+      // Ensure memberId is properly formatted
+      let formattedId = memberId;
+      if (typeof memberId === "string") {
+        const parsed = parseInt(memberId, 10);
+        if (!isNaN(parsed)) {
+          formattedId = parsed;
+          console.log(
+            `Converted string ID '${memberId}' to numeric ID: ${formattedId}`
+          );
+        }
+      }
+
+      const response = await serverAPI.get(`/api/loans/member/${formattedId}`);
 
       console.log("Member loans response:", {
         hasData: !!response.data,
@@ -344,7 +359,41 @@ const setupIpcHandlers = () => {
       return loans;
     } catch (error) {
       console.error(`Error fetching loans for member ${memberId}:`, error);
-      return [];
+
+      // Try one more time with the opposite format (string vs number)
+      try {
+        console.log("Attempting retry with alternate ID format...");
+        let altId =
+          typeof memberId === "string"
+            ? parseInt(memberId, 10)
+            : memberId.toString();
+        console.log(`Retrying with ID: ${altId} (type: ${typeof altId})`);
+
+        const response = await serverAPI.get(`/api/loans/member/${altId}`);
+
+        let loans = [];
+        if (Array.isArray(response.data)) {
+          loans = response.data;
+        } else if (
+          response.data &&
+          response.data.loans &&
+          Array.isArray(response.data.loans)
+        ) {
+          loans = response.data.loans;
+        } else if (
+          response.data &&
+          typeof response.data === "object" &&
+          !Array.isArray(response.data)
+        ) {
+          loans = [response.data];
+        }
+
+        console.log(`Retry successful! Processed ${loans.length} loans.`);
+        return loans;
+      } catch (retryError) {
+        console.error("Retry also failed:", retryError);
+        return [];
+      }
     }
   });
 
