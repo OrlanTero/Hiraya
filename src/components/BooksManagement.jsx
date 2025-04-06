@@ -40,13 +40,21 @@ import {
   ColorLens as ColorIcon,
   Description as DescriptionIcon,
   Info as InfoIcon,
+  LibraryBooks as LibraryBooksIcon,
+  Visibility as VisibilityIcon,
 } from "@mui/icons-material";
+import BookDetails from "./BookDetails";
+import BookCopyForm from "./BookCopyForm";
 
 const BooksManagement = () => {
   const [books, setBooks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const [openDialog, setOpenDialog] = useState(false);
+  const [openDetailsDialog, setOpenDetailsDialog] = useState(false);
+  const [openCopyDialog, setOpenCopyDialog] = useState(false);
+  const [selectedBookId, setSelectedBookId] = useState(null);
+  const [selectedCopyId, setSelectedCopyId] = useState(null);
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: "",
@@ -131,6 +139,41 @@ const BooksManagement = () => {
 
   const handleCloseDialog = () => {
     setOpenDialog(false);
+  };
+
+  const handleOpenDetailsDialog = (bookId) => {
+    setSelectedBookId(bookId);
+    setOpenDetailsDialog(true);
+  };
+
+  const handleCloseDetailsDialog = () => {
+    setOpenDetailsDialog(false);
+    setSelectedBookId(null);
+  };
+
+  const handleOpenCopyDialog = (bookId, copyId = null) => {
+    setSelectedBookId(bookId);
+    setSelectedCopyId(copyId);
+    setOpenCopyDialog(true);
+  };
+
+  const handleCloseCopyDialog = () => {
+    setOpenCopyDialog(false);
+    setSelectedBookId(null);
+    setSelectedCopyId(null);
+  };
+
+  const handleCopySaved = (copyData) => {
+    setSnackbar({
+      open: true,
+      message: `Book copy ${selectedCopyId ? "updated" : "added"} successfully`,
+      severity: "success",
+    });
+
+    // Refresh book data
+    if (openDetailsDialog && selectedBookId) {
+      // If details dialog is open, it will refresh its own data
+    }
   };
 
   const handleInputChange = (e) => {
@@ -666,20 +709,45 @@ const BooksManagement = () => {
                     />
                   </TableCell>
                   <TableCell>
-                    <IconButton
-                      size="small"
-                      color="primary"
-                      onClick={() => handleOpenDialog(book)}
-                    >
-                      <EditIcon />
-                    </IconButton>
-                    <IconButton
-                      size="small"
-                      color="error"
-                      onClick={() => handleDeleteBook(book.id)}
-                    >
-                      <DeleteIcon />
-                    </IconButton>
+                    <Tooltip title="View Book Details">
+                      <IconButton
+                        size="small"
+                        color="info"
+                        onClick={() => handleOpenDetailsDialog(book.id)}
+                        sx={{ mr: 1 }}
+                      >
+                        <VisibilityIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Add Copy">
+                      <IconButton
+                        size="small"
+                        color="success"
+                        onClick={() => handleOpenCopyDialog(book.id)}
+                        sx={{ mr: 1 }}
+                      >
+                        <LibraryBooksIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Edit Book">
+                      <IconButton
+                        size="small"
+                        color="primary"
+                        onClick={() => handleOpenDialog(book)}
+                        sx={{ mr: 1 }}
+                      >
+                        <EditIcon />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Delete Book">
+                      <IconButton
+                        size="small"
+                        color="error"
+                        onClick={() => handleDeleteBook(book.id)}
+                      >
+                        <DeleteIcon />
+                      </IconButton>
+                    </Tooltip>
                   </TableCell>
                 </TableRow>
               ))
@@ -761,6 +829,33 @@ const BooksManagement = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      {/* Book Details Dialog */}
+      {openDetailsDialog && (
+        <BookDetails
+          bookId={selectedBookId}
+          onClose={handleCloseDetailsDialog}
+          onEdit={(book) => {
+            handleCloseDetailsDialog();
+            handleOpenDialog(book);
+          }}
+          onAddCopy={(book) => {
+            handleCloseDetailsDialog();
+            handleOpenCopyDialog(book.id);
+          }}
+        />
+      )}
+
+      {/* Book Copy Form Dialog */}
+      {openCopyDialog && (
+        <BookCopyForm
+          open={openCopyDialog}
+          bookId={selectedBookId}
+          copyId={selectedCopyId}
+          onClose={handleCloseCopyDialog}
+          onSave={handleCopySaved}
+        />
+      )}
 
       {/* Snackbar for notifications */}
       <Snackbar

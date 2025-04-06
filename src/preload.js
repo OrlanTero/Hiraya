@@ -211,13 +211,23 @@ contextBridge.exposeInMainWorld("electronAPI", {
     // Loans
     loans: {
       getAll: () => ipcRenderer.invoke("loans:getAll"),
+      getActiveLoans: () => ipcRenderer.invoke("loans:getActive"),
+      getOverdueLoans: () => ipcRenderer.invoke("loans:getOverdue"),
       getByMember: (memberId) =>
         ipcRenderer.invoke("loans:getByMember", memberId),
-      getActive: () => ipcRenderer.invoke("loans:getActive"),
-      getOverdue: () => ipcRenderer.invoke("loans:getOverdue"),
-      borrow: (memberData) => ipcRenderer.invoke("loans:borrow", memberData),
-      return: (loanIds) => ipcRenderer.invoke("loans:return", loanIds),
-      returnViaQR: (qrData) => ipcRenderer.invoke("loans:returnViaQR", qrData),
+      add: (loan) => ipcRenderer.invoke("loans:add", loan),
+      update: (id, loan) => ipcRenderer.invoke("loans:update", id, loan),
+      returnBook: (id, reviewData) =>
+        ipcRenderer.invoke("loans:returnBook", id, reviewData),
+      borrowBooks: (memberData) =>
+        ipcRenderer.invoke("loans:borrowBooks", memberData),
+      returnBooks: (loanIds) =>
+        ipcRenderer.invoke("loans:returnBooks", loanIds),
+      returnBooksViaQRCode: (qrData) =>
+        ipcRenderer.invoke("loans:returnBooksViaQRCode", qrData),
+      updateTable: () => ipcRenderer.invoke("loans:updateTable"),
+      clearLoans: () => ipcRenderer.invoke("loans:clearLoans"),
+      repairDatabase: () => ipcRenderer.invoke("loans:repairDatabase"),
     },
   },
 
@@ -357,9 +367,39 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("loans:getByMember", memberId),
   getActiveLoans: () => ipcRenderer.invoke("loans:getActive"),
   getOverdueLoans: () => ipcRenderer.invoke("loans:getOverdue"),
-  borrowBooks: (memberData) => ipcRenderer.invoke("loans:borrow", memberData),
-  returnBooks: (loanIds) => ipcRenderer.invoke("loans:return", loanIds),
-  returnBooksViaQR: (qrData) => ipcRenderer.invoke("loans:returnViaQR", qrData),
+  borrowBooks: (memberData) =>
+    ipcRenderer.invoke("loans:borrowBooks", memberData),
+  returnBooks: (loanIds) => ipcRenderer.invoke("loans:returnBooks", loanIds),
+  returnBooksViaQR: (qrData) =>
+    ipcRenderer.invoke("loans:returnBooksViaQRCode", qrData),
+  updateLoansTable: () => ipcRenderer.invoke("loans:updateTable"),
+  clearLoans: () => ipcRenderer.invoke("loans:clearLoans"),
+  repairDatabase: () => ipcRenderer.invoke("loans:repairDatabase"),
+
+  // Shelves
+  getAllShelves: () => ipcRenderer.invoke("shelves:getAll"),
+  getShelfById: (id) => ipcRenderer.invoke("shelves:getById", id),
+  addShelf: (shelf) => ipcRenderer.invoke("shelves:add", shelf),
+  updateShelf: (id, shelf) =>
+    ipcRenderer.invoke("shelves:update", { id, shelf }),
+  deleteShelf: (id) => ipcRenderer.invoke("shelves:delete", id),
+  getShelfContents: (id) => ipcRenderer.invoke("shelves:getContents", id),
+  updateShelvesTable: () => ipcRenderer.invoke("shelves:updateTable"),
+
+  // Book Copies
+  getAllBookCopies: () => ipcRenderer.invoke("bookcopies:getAll"),
+  getBookCopyById: (id) => ipcRenderer.invoke("bookcopies:getById", id),
+  getBookCopiesByBookId: (bookId) =>
+    ipcRenderer.invoke("bookcopies:getByBookId", bookId),
+  addBookCopy: (copy) => ipcRenderer.invoke("bookcopies:add", copy),
+  updateBookCopy: (id, copy) =>
+    ipcRenderer.invoke("bookcopies:update", { id, copy }),
+  deleteBookCopy: (id) => ipcRenderer.invoke("bookcopies:delete", id),
+  moveBookCopy: (id, shelfId) =>
+    ipcRenderer.invoke("bookcopies:move", { id, shelfId }),
+  getBookAvailability: (bookId) =>
+    ipcRenderer.invoke("books:getAvailability", bookId),
+  updateBookCopiesTable: () => ipcRenderer.invoke("bookcopies:updateTable"),
 
   // Socket.io related
   getConnectedClients: () => ipcRenderer.invoke("socket:getClients"),

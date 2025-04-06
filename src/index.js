@@ -29,6 +29,8 @@ const {
   deleteUser,
   updateMembersTable,
   updateBooksTable,
+  updateLoansTable,
+  updateBookCopiesTable,
   getAllLoans,
   getLoansByMember,
   getActiveLoans,
@@ -40,6 +42,23 @@ const {
   returnBooks,
   returnBooksViaQRCode,
   resetDatabase,
+  getAllShelves,
+  getShelfById,
+  addShelf,
+  updateShelf,
+  deleteShelf,
+  getShelfContents,
+  getAllBookCopies,
+  getBookCopyById,
+  getBookCopiesByBookId,
+  addBookCopy,
+  updateBookCopy,
+  deleteBookCopy,
+  moveBookCopy,
+  getBookAvailability,
+  updateShelvesTable,
+  clearLoans,
+  repairDatabase,
 } = require("./database/db");
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -289,9 +308,24 @@ const createWindow = () => {
   });
 };
 
-// Ensure React Devtools is available if in development mode
-app.whenReady().then(() => {
-  console.log("Electron app ready, creating window");
+// Initialize the database when the app is ready
+app.whenReady().then(async () => {
+  // Set up IPC handlers
+  setupIpcHandlers();
+
+  // Initialize database
+  try {
+    await initDatabase();
+    await updateBookCopiesTable();
+    await updateLoansTable();
+    await updateShelvesTable();
+    console.log("Database initialized and updated successfully");
+  } catch (error) {
+    console.error("Database initialization failed:", error);
+  }
+
+  // Create window
+  createWindow();
 
   // Set up Socket.io server
   socketServer = setupSocketServer(3000);
@@ -301,11 +335,6 @@ app.whenReady().then(() => {
   apiServer = apiApp.listen(API_PORT, () => {
     console.log(`API server running on port ${API_PORT}`);
   });
-
-  createWindow();
-
-  // Set up IPC handlers
-  setupIpcHandlers();
 
   // On OS X it's common to re-create a window in the app when the
   // dock icon is clicked and there are no other windows open.
@@ -589,6 +618,21 @@ function setupIpcHandlers() {
     return await updateMembersTable();
   });
 
+  // Make sure to update loans table with book_copy_id field
+  ipcMain.handle("loans:updateTable", async () => {
+    return await updateLoansTable();
+  });
+
+  // Make sure to update book_copies table with copy_number field
+  ipcMain.handle("bookcopies:updateTable", async () => {
+    return await updateBookCopiesTable();
+  });
+
+  // Make sure to update shelves table with section and code fields
+  ipcMain.handle("shelves:updateTable", async () => {
+    return await updateShelvesTable();
+  });
+
   // Database management
   ipcMain.handle("database:reset", async () => {
     try {
@@ -621,7 +665,53 @@ function setupIpcHandlers() {
     return await getOverdueLoans();
   });
 
-  ipcMain.handle("loans:borrow", async (event, memberData) => {
+  ipcMain.handle("loans:add", async (event, loan) => {
+    const result = await addLoan(loan);
+
+    // Emit socket.io event for book borrowing if successful
+    if (result.success && socketServer.io) {
+      socketServer.io.emit("notification", {
+        type: "book_borrowed",
+        memberId: loan.member_id,
+        bookIds: loan.book_ids,
+        timestamp: new Date(),
+      });
+    }
+
+    return result;
+  });
+
+  ipcMain.handle("loans:update", async (event, id, loan) => {
+    const result = await updateLoan(id, loan);
+
+    // Emit socket.io event for book returning if successful
+    if (result.success && socketServer.io) {
+      socketServer.io.emit("notification", {
+        type: "book_returned",
+        loanIds: [id],
+        timestamp: new Date(),
+      });
+    }
+
+    return result;
+  });
+
+  ipcMain.handle("loans:returnBook", async (event, id, reviewData) => {
+    const result = await returnBook(id, reviewData);
+
+    // Emit socket.io event for book returning if successful
+    if (result.success && socketServer.io) {
+      socketServer.io.emit("notification", {
+        type: "book_returned",
+        loanIds: [id],
+        timestamp: new Date(),
+      });
+    }
+
+    return result;
+  });
+
+  ipcMain.handle("loans:borrowBooks", async (event, memberData) => {
     const result = await borrowBooks(memberData);
 
     // Emit socket.io event for book borrowing if successful
@@ -637,7 +727,7 @@ function setupIpcHandlers() {
     return result;
   });
 
-  ipcMain.handle("loans:return", async (event, loanIds) => {
+  ipcMain.handle("loans:returnBooks", async (event, loanIds) => {
     const result = await returnBooks(loanIds);
 
     // Emit socket.io event for book returning if successful
@@ -652,28 +742,29 @@ function setupIpcHandlers() {
     return result;
   });
 
-  // Add the new IPC handler for QR code returns
-  ipcMain.handle("loans:returnViaQR", async (event, qrData) => {
-    try {
-      const result = await returnBooksViaQRCode(qrData);
+  ipcMain.handle("loans:returnBooksViaQRCode", async (event, qrData) => {
+    const result = await returnBooksViaQRCode(qrData);
 
-      // Emit socket.io event for book returning via QR if successful
-      if (result.success && socketServer.io) {
-        socketServer.io.emit("notification", {
-          type: "book_returned_qr",
-          qrData: qrData,
-          timestamp: new Date(),
-        });
-      }
-
-      return result;
-    } catch (error) {
-      console.error("Error in loans:returnViaQR:", error);
-      return {
-        success: false,
-        message: error.message || "Failed to return books via QR code",
-      };
+    // Emit socket.io event for book returning via QR if successful
+    if (result.success && socketServer.io) {
+      socketServer.io.emit("notification", {
+        type: "book_returned_qr",
+        qrData: qrData,
+        timestamp: new Date(),
+      });
     }
+
+    return result;
+  });
+
+  ipcMain.handle("loans:clearLoans", async () => {
+    const result = await clearLoans();
+    return result;
+  });
+
+  ipcMain.handle("loans:repairDatabase", async () => {
+    const result = await repairDatabase();
+    return result;
   });
 
   // Socket.io related IPC handlers
@@ -683,6 +774,64 @@ function setupIpcHandlers() {
 
   ipcMain.handle("socket:broadcast", (event, { eventName, data }) => {
     return broadcastEvent(socketServer.io, eventName, data);
+  });
+
+  // Shelves
+  ipcMain.handle("shelves:getAll", async () => {
+    return await getAllShelves();
+  });
+
+  ipcMain.handle("shelves:getById", async (event, id) => {
+    return await getShelfById(id);
+  });
+
+  ipcMain.handle("shelves:add", async (event, shelf) => {
+    return await addShelf(shelf);
+  });
+
+  ipcMain.handle("shelves:update", async (event, { id, shelf }) => {
+    return await updateShelf(id, shelf);
+  });
+
+  ipcMain.handle("shelves:delete", async (event, id) => {
+    return await deleteShelf(id);
+  });
+
+  ipcMain.handle("shelves:getContents", async (event, shelfId) => {
+    return await getShelfContents(shelfId);
+  });
+
+  // Book Copies
+  ipcMain.handle("bookcopies:getAll", async () => {
+    return await getAllBookCopies();
+  });
+
+  ipcMain.handle("bookcopies:getById", async (event, id) => {
+    return await getBookCopyById(id);
+  });
+
+  ipcMain.handle("bookcopies:getByBookId", async (event, bookId) => {
+    return await getBookCopiesByBookId(bookId);
+  });
+
+  ipcMain.handle("bookcopies:add", async (event, bookCopy) => {
+    return await addBookCopy(bookCopy);
+  });
+
+  ipcMain.handle("bookcopies:update", async (event, { id, copy }) => {
+    return await updateBookCopy(id, copy);
+  });
+
+  ipcMain.handle("bookcopies:delete", async (event, id) => {
+    return await deleteBookCopy(id);
+  });
+
+  ipcMain.handle("bookcopies:move", async (event, { id, shelfId }) => {
+    return await moveBookCopy(id, shelfId);
+  });
+
+  ipcMain.handle("books:getAvailability", async (event, bookId) => {
+    return await getBookAvailability(bookId);
   });
 }
 

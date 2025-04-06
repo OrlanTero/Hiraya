@@ -14,6 +14,20 @@ const {
   borrowBooks,
   returnBook,
   updateLoan,
+  getAllShelves,
+  getShelfById,
+  addShelf,
+  updateShelf,
+  deleteShelf,
+  getShelfContents,
+  getAllBookCopies,
+  getBookCopyById,
+  getBookCopiesByBookId,
+  addBookCopy,
+  updateBookCopy,
+  deleteBookCopy,
+  moveBookCopy,
+  getBookAvailability,
 } = require("./database/db");
 
 // Mock database for development
@@ -355,6 +369,358 @@ function createApiServer(ipcMain, socketServer) {
     }
   });
 
+  // Book Copies endpoints
+  app.get("/api/bookcopies", async (req, res) => {
+    console.log("Getting all book copies");
+    try {
+      const bookCopies = await getAllBookCopies();
+      console.log(`Returning ${bookCopies.length} book copies`);
+      res.json(bookCopies);
+    } catch (error) {
+      console.error("Error fetching book copies:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch book copies",
+        error: error.message,
+      });
+    }
+  });
+
+  app.get("/api/bookcopies/:id", async (req, res) => {
+    const copyId = req.params.id;
+    console.log(`Getting book copy with ID ${copyId}`);
+
+    try {
+      const bookCopy = await getBookCopyById(copyId);
+
+      if (bookCopy) {
+        res.json(bookCopy);
+      } else {
+        res.status(404).json({
+          success: false,
+          message: "Book copy not found",
+        });
+      }
+    } catch (error) {
+      console.error(`Error fetching book copy ${copyId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch book copy",
+        error: error.message,
+      });
+    }
+  });
+
+  app.get("/api/books/:id/copies", async (req, res) => {
+    const bookId = req.params.id;
+    console.log(`Getting copies for book with ID ${bookId}`);
+
+    try {
+      const bookCopies = await getBookCopiesByBookId(bookId);
+      res.json(bookCopies);
+    } catch (error) {
+      console.error(`Error fetching copies for book ${bookId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch book copies",
+        error: error.message,
+      });
+    }
+  });
+
+  app.get("/api/books/:id/availability", async (req, res) => {
+    const bookId = req.params.id;
+    console.log(`Getting availability for book with ID ${bookId}`);
+
+    try {
+      const availability = await getBookAvailability(bookId);
+      res.json(availability);
+    } catch (error) {
+      console.error(`Error fetching availability for book ${bookId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch book availability",
+        error: error.message,
+      });
+    }
+  });
+
+  app.post("/api/bookcopies", async (req, res) => {
+    console.log("Adding new book copy:", req.body);
+    try {
+      const bookCopyData = {
+        ...req.body,
+        book_id: parseInt(req.body.book_id, 10),
+        shelf_id: req.body.shelf_id ? parseInt(req.body.shelf_id, 10) : null,
+      };
+
+      const result = await addBookCopy(bookCopyData);
+
+      if (socketServer) {
+        socketServer.emit("book_copy_added", {
+          book_copy_id: result[0].id,
+          book_id: bookCopyData.book_id,
+          barcode: bookCopyData.barcode,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      res.json({
+        success: true,
+        data: result[0],
+        message: "Book copy added successfully",
+      });
+    } catch (error) {
+      console.error("Error adding book copy:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to add book copy",
+        error: error.message,
+      });
+    }
+  });
+
+  app.put("/api/bookcopies/:id", async (req, res) => {
+    const copyId = req.params.id;
+    console.log(`Updating book copy ${copyId}:`, req.body);
+
+    try {
+      const result = await updateBookCopy(copyId, req.body);
+
+      if (socketServer) {
+        socketServer.emit("book_copy_updated", {
+          book_copy_id: copyId,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      res.json({
+        success: true,
+        data: result[0],
+        message: "Book copy updated successfully",
+      });
+    } catch (error) {
+      console.error(`Error updating book copy ${copyId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to update book copy",
+        error: error.message,
+      });
+    }
+  });
+
+  app.delete("/api/bookcopies/:id", async (req, res) => {
+    const copyId = req.params.id;
+    console.log(`Deleting book copy ${copyId}`);
+
+    try {
+      await deleteBookCopy(copyId);
+
+      if (socketServer) {
+        socketServer.emit("book_copy_deleted", {
+          book_copy_id: copyId,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Book copy deleted successfully",
+      });
+    } catch (error) {
+      console.error(`Error deleting book copy ${copyId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to delete book copy",
+        error: error.message,
+      });
+    }
+  });
+
+  app.post("/api/bookcopies/:id/move", async (req, res) => {
+    const copyId = req.params.id;
+    const { shelf_id } = req.body;
+    console.log(`Moving book copy ${copyId} to shelf ${shelf_id}`);
+
+    try {
+      const result = await moveBookCopy(copyId, shelf_id);
+
+      if (socketServer) {
+        socketServer.emit("book_copy_moved", {
+          book_copy_id: copyId,
+          shelf_id: shelf_id,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      res.json({
+        success: true,
+        message: result.message,
+      });
+    } catch (error) {
+      console.error(`Error moving book copy ${copyId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to move book copy",
+        error: error.message,
+      });
+    }
+  });
+
+  // Shelves endpoints
+  app.get("/api/shelves", async (req, res) => {
+    console.log("Getting all shelves");
+    try {
+      const shelves = await getAllShelves();
+      console.log(`Returning ${shelves.length} shelves`);
+      res.json(shelves);
+    } catch (error) {
+      console.error("Error fetching shelves:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch shelves",
+        error: error.message,
+      });
+    }
+  });
+
+  app.get("/api/shelves/:id", async (req, res) => {
+    const shelfId = req.params.id;
+    console.log(`Getting shelf with ID ${shelfId}`);
+
+    try {
+      const shelf = await getShelfById(shelfId);
+
+      if (shelf) {
+        res.json(shelf);
+      } else {
+        res.status(404).json({
+          success: false,
+          message: "Shelf not found",
+        });
+      }
+    } catch (error) {
+      console.error(`Error fetching shelf ${shelfId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch shelf",
+        error: error.message,
+      });
+    }
+  });
+
+  app.get("/api/shelves/:id/contents", async (req, res) => {
+    const shelfId = req.params.id;
+    console.log(`Getting contents of shelf with ID ${shelfId}`);
+
+    try {
+      const contents = await getShelfContents(shelfId);
+      res.json(contents);
+    } catch (error) {
+      console.error(`Error fetching shelf contents ${shelfId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to fetch shelf contents",
+        error: error.message,
+      });
+    }
+  });
+
+  app.post("/api/shelves", async (req, res) => {
+    console.log("Adding new shelf:", req.body);
+    try {
+      const result = await addShelf(req.body);
+
+      if (socketServer) {
+        socketServer.emit("shelf_added", {
+          shelf_id: result[0].id,
+          shelf_name: req.body.name,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      res.json({
+        success: true,
+        data: result[0],
+        message: "Shelf added successfully",
+      });
+    } catch (error) {
+      console.error("Error adding shelf:", error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to add shelf",
+        error: error.message,
+      });
+    }
+  });
+
+  app.put("/api/shelves/:id", async (req, res) => {
+    const shelfId = req.params.id;
+    console.log(`Updating shelf ${shelfId}:`, req.body);
+
+    try {
+      const result = await updateShelf(shelfId, req.body);
+
+      if (socketServer) {
+        socketServer.emit("shelf_updated", {
+          shelf_id: shelfId,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      res.json({
+        success: true,
+        data: result[0],
+        message: "Shelf updated successfully",
+      });
+    } catch (error) {
+      console.error(`Error updating shelf ${shelfId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to update shelf",
+        error: error.message,
+      });
+    }
+  });
+
+  app.delete("/api/shelves/:id", async (req, res) => {
+    const shelfId = req.params.id;
+    console.log(`Deleting shelf ${shelfId}`);
+
+    try {
+      // First check if there are any book copies on this shelf
+      const shelfContents = await getShelfContents(shelfId);
+
+      if (shelfContents.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot delete shelf that contains ${shelfContents.length} book copies. Please move or remove all books first.`,
+        });
+      }
+
+      await deleteShelf(shelfId);
+
+      if (socketServer) {
+        socketServer.emit("shelf_deleted", {
+          shelf_id: shelfId,
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+    res.json({
+      success: true,
+        message: "Shelf deleted successfully",
+      });
+    } catch (error) {
+      console.error(`Error deleting shelf ${shelfId}:`, error);
+      res.status(500).json({
+        success: false,
+        message: "Failed to delete shelf",
+        error: error.message,
+      });
+    }
+  });
+
   // Member endpoints
   app.get("/api/members/:id", async (req, res) => {
     const memberId = req.params.id;
@@ -448,16 +814,16 @@ function createApiServer(ipcMain, socketServer) {
     console.log("Borrowing book with data:", req.body);
 
     try {
-      // Parse member_id and book_id to ensure they're in the correct format
+      // Parse member_id and book_copy_id to ensure they're in the correct format
       const borrowData = {
         ...req.body,
         member_id: parseInt(req.body.member_id.toString(), 10),
-        book_id: parseInt(req.body.book_id.toString(), 10),
+        book_copy_id: parseInt(req.body.book_copy_id.toString(), 10),
       };
 
-      if (isNaN(borrowData.member_id) || isNaN(borrowData.book_id)) {
+      if (isNaN(borrowData.member_id) || isNaN(borrowData.book_copy_id)) {
         throw new Error(
-          `Invalid ID format. Member ID: ${req.body.member_id}, Book ID: ${req.body.book_id}`
+          `Invalid ID format. Member ID: ${req.body.member_id}, Book Copy ID: ${req.body.book_copy_id}`
         );
       }
 
@@ -472,20 +838,20 @@ function createApiServer(ipcMain, socketServer) {
         });
       }
 
-      // Check if book exists
-      const book = await getBookById(borrowData.book_id);
-      if (!book) {
+      // Check if book copy exists
+      const bookCopy = await getBookCopyById(borrowData.book_copy_id);
+      if (!bookCopy) {
         return res.status(404).json({
           success: false,
-          message: `Book with ID ${borrowData.book_id} not found`,
+          message: `Book copy with ID ${borrowData.book_copy_id} not found`,
         });
       }
 
-      // Check if book is available
-      if (book.status !== "Available") {
+      // Check if book copy is available
+      if (bookCopy.status !== "Available") {
         return res.status(400).json({
           success: false,
-          message: `Book "${book.title}" is not available for borrowing (current status: ${book.status})`,
+          message: `Book copy "${bookCopy.title}" (${bookCopy.barcode}) is not available for borrowing (current status: ${bookCopy.status})`,
         });
       }
 
@@ -495,8 +861,9 @@ function createApiServer(ipcMain, socketServer) {
         // Notify via socket if available
         if (socketServer) {
           socketServer.emit("book_borrowed", {
-            bookId: borrowData.book_id,
-            bookTitle: book.title,
+            book_copy_id: borrowData.book_copy_id,
+            book_title: bookCopy.title,
+            barcode: bookCopy.barcode,
             memberId: borrowData.member_id,
             memberName: member.name,
             timestamp: new Date().toISOString(),
@@ -506,7 +873,7 @@ function createApiServer(ipcMain, socketServer) {
         res.json({
           success: true,
           data: result,
-          message: `"${book.title}" has been successfully borrowed`,
+          message: `"${bookCopy.title}" (${bookCopy.barcode}) has been successfully borrowed`,
         });
       } catch (dbError) {
         console.error("Database error while borrowing book:", dbError);
@@ -566,15 +933,19 @@ function createApiServer(ipcMain, socketServer) {
         });
       }
 
+      // Get book copy details for socket notification
+      const bookCopy = await getBookCopyById(loan.book_copy_id);
+
       // Return the book with rating and review data
       const result = await returnBook(loanId, reviewData);
 
       // Notify via socket if available
-      if (socketServer && loan.book_title) {
+      if (socketServer && bookCopy) {
         socketServer.emit("book_returned", {
           loanId: loanId,
-          bookId: loan.book_id,
-          bookTitle: loan.book_title,
+          book_copy_id: loan.book_copy_id,
+          book_title: bookCopy.title,
+          barcode: bookCopy.barcode,
           memberId: loan.member_id,
           memberName: loan.member_name,
           timestamp: new Date().toISOString(),
@@ -585,8 +956,8 @@ function createApiServer(ipcMain, socketServer) {
 
       res.json({
         success: true,
-        message: loan.book_title
-          ? `"${loan.book_title}" has been successfully returned`
+        message: bookCopy
+          ? `"${bookCopy.title}" (${bookCopy.barcode}) has been successfully returned`
           : "Book returned successfully",
       });
     } catch (error) {

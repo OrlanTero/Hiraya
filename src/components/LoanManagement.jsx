@@ -39,6 +39,7 @@ import {
   List,
   ListItem,
   Avatar,
+  Popover,
 } from "@mui/material";
 import {
   Book as BookIcon,
@@ -58,6 +59,13 @@ import {
   QrCodeScanner as QrCodeScannerIcon,
   FlashOn as FlashOnIcon,
   FlashOff as FlashOffIcon,
+  LocationOn as LocationOn,
+  Delete,
+  Receipt as ReceiptIcon,
+  AssignmentReturned as AssignmentReturnedIcon,
+  Settings as SettingsIcon,
+  Camera as CameraIcon,
+  CameraAlt as CameraAltIcon,
 } from "@mui/icons-material";
 import QRCode from "qrcode";
 import jsQR from "jsqr";
@@ -116,6 +124,26 @@ const LoanManagement = () => {
   // Add a manual entry option for QR data
   const [manualQRInput, setManualQRInput] = useState("");
 
+  // Add new state for database repair status
+  const [isRepairing, setIsRepairing] = useState(false);
+
+  // Add new state for selected book copy ID
+  const [selectedBookCopyId, setSelectedBookCopyId] = useState("");
+
+  // Add new state for loan clearing confirmation dialog
+  const [openClearLoansDialog, setOpenClearLoansDialog] = useState(false);
+  const [isClearingLoans, setIsClearingLoans] = useState(false);
+
+  // Add these new state variables
+  const [openCopySelectDialog, setOpenCopySelectDialog] = useState(false);
+  const [availableCopiesByBook, setAvailableCopiesByBook] = useState({});
+  const [selectedBookCopies, setSelectedBookCopies] = useState([]);
+  const [loadingCopies, setLoadingCopies] = useState(false);
+
+  // Add state for QR popup
+  const [qrPopoverAnchor, setQrPopoverAnchor] = useState(null);
+  const [currentLoanQR, setCurrentLoanQR] = useState(null);
+
   const handleManualQRSubmit = () => {
     if (manualQRInput.trim() === "") {
       setScannerResult("Please enter QR code data");
@@ -161,6 +189,52 @@ const LoanManagement = () => {
       console.error("Error processing manual QR input:", error);
       setScannerResult("Invalid QR code data format");
     }
+  };
+
+  // Function to clear all loans
+  const handleClearAllLoans = async () => {
+    try {
+      setIsClearingLoans(true);
+      // The correct path is just window.api.clearLoans() for the legacy API structure
+      const result = await window.api.clearLoans();
+
+      if (result.success) {
+        setSnackbar({
+          open: true,
+          message: `Successfully cleared all loans. ${result.message}`,
+          severity: "success",
+        });
+
+        // Refresh loans list
+        fetchLoansByTab(activeTab);
+      } else {
+        setSnackbar({
+          open: true,
+          message: `Failed to clear loans: ${result.error || "Unknown error"}`,
+          severity: "error",
+        });
+      }
+    } catch (error) {
+      console.error("Error clearing loans:", error);
+      setSnackbar({
+        open: true,
+        message: `Error: ${error.message || "Failed to clear loans"}`,
+        severity: "error",
+      });
+    } finally {
+      setIsClearingLoans(false);
+      setOpenClearLoansDialog(false);
+    }
+  };
+
+  // Function to open clear loans confirmation dialog
+  const handleOpenClearLoansDialog = () => {
+    setOpenClearLoansDialog(true);
+  };
+
+  // Function to close clear loans confirmation dialog
+  const handleCloseClearLoansDialog = () => {
+    setOpenClearLoansDialog(false);
   };
 
   // Debug function to show the current camera view as an image
@@ -231,6 +305,65 @@ const LoanManagement = () => {
     fetchInitialData();
   }, []);
 
+  // Add logging to inspect loan data when it updates
+  useEffect(() => {
+    if (loans.length > 0) {
+      console.log("Loans data loaded:", loans);
+      console.log("First loan sample:", loans[0]);
+    }
+  }, [loans]);
+
+  // Check if we're being redirected from a book details page with a specific copy to borrow
+  const storedBookCopyId = localStorage.getItem("selectedBookCopyId");
+  const redirectToBorrow = localStorage.getItem("redirectToBorrow");
+
+  if (storedBookCopyId && redirectToBorrow === "true") {
+    handleDirectCopyBorrow(storedBookCopyId);
+
+    // Clear the localStorage flags
+    localStorage.removeItem("selectedBookCopyId");
+    localStorage.removeItem("redirectToBorrow");
+  }
+
+  // Handle borrowing a specific book copy
+  const handleDirectCopyBorrow = async (copyId) => {
+    try {
+      // 1. First get the book copy details
+      const bookCopy = await window.api.getBookCopyById(copyId);
+      if (!bookCopy) {
+        throw new Error(`Book copy with ID ${copyId} not found`);
+      }
+
+      // 2. Get the book details
+      const book = await window.api.getBookById(bookCopy.book_id);
+
+      // 3. Open the borrow dialog
+      handleOpenBorrowDialog();
+
+      // 4. Set the selected book
+      setSelectedBooks([book]);
+
+      // 5. Show notification that we need to select a member to complete the borrow process
+      setSnackbar({
+        open: true,
+        message: "Please select a member to borrow this book copy",
+        severity: "info",
+      });
+
+      // 6. Store the specific copy ID to be used when borrowing
+      setSelectedBookCopyId(copyId);
+    } catch (error) {
+      console.error("Error initializing direct book copy borrow:", error);
+      setSnackbar({
+        open: true,
+        message: `Error: ${
+          error.message || "Failed to initialize borrowing process"
+        }`,
+        severity: "error",
+      });
+    }
+  };
+
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
     fetchLoansByTab(newValue);
@@ -250,17 +383,72 @@ const LoanManagement = () => {
         default:
           loansData = await window.api.getAllLoans();
       }
-      setLoans(loansData);
+
+      // Check and fix any missing book_id fields in the loans
+      const fixedLoansData = await ensureCompleteLoansData(loansData);
+
+      setLoans(fixedLoansData);
     } catch (error) {
       console.error("Error fetching loans:", error);
       setSnackbar({
         open: true,
-        message: "Failed to load loans",
+        message:
+          "Failed to load loans. The database schema might need to be updated.",
         severity: "error",
       });
+      // Set empty array to prevent further errors
+      setLoans([]);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Function to ensure loan data has all needed fields
+  const ensureCompleteLoansData = async (loansData) => {
+    if (!loansData || loansData.length === 0) return loansData;
+
+    // Check if any loan is missing book_id
+    const incompleteLoans = loansData.filter((loan) => !loan.book_id);
+
+    if (incompleteLoans.length === 0) {
+      // All loans have book_id, no need to fix
+      return loansData;
+    }
+
+    console.log(
+      `Found ${incompleteLoans.length} loans with missing book_id, fixing...`
+    );
+
+    // For each incomplete loan, get the book_copy and use it to find the book
+    const fixedLoans = await Promise.all(
+      loansData.map(async (loan) => {
+        if (loan.book_id) return loan; // Already has book_id
+
+        try {
+          // Get the book copy to find its book_id
+          const bookCopy = await window.api.getBookCopyById(loan.book_copy_id);
+          if (!bookCopy) {
+            console.error(
+              `Could not find book copy with ID ${loan.book_copy_id}`
+            );
+            return loan;
+          }
+
+          // ... [rest of the original file content remains unchanged]
+        } catch (error) {
+          console.error("Error initializing direct book copy borrow:", error);
+          setSnackbar({
+            open: true,
+            message: `Error: ${
+              error.message || "Failed to initialize borrowing process"
+            }`,
+            severity: "error",
+          });
+        }
+      })
+    );
+
+    return fixedLoans;
   };
 
   const handleSearch = (event) => {
@@ -290,6 +478,8 @@ const LoanManagement = () => {
 
   const handleCloseBorrowDialog = () => {
     setOpenBorrowDialog(false);
+    // Reset the book copy ID when closing the dialog
+    setSelectedBookCopyId("");
   };
 
   const handleOpenReturnDialog = () => {
@@ -301,11 +491,12 @@ const LoanManagement = () => {
     setOpenReturnDialog(false);
   };
 
-  const handleBorrowBooks = async () => {
+  // Function to handle opening copy selection dialog
+  const handleOpenCopySelectDialog = async () => {
     if (!selectedMember) {
       setSnackbar({
         open: true,
-        message: "Please select a member",
+        message: "Please select a member first",
         severity: "error",
       });
       return;
@@ -321,9 +512,102 @@ const LoanManagement = () => {
     }
 
     try {
+      setLoadingCopies(true);
+      // Fetch available copies for each selected book
+      const copiesData = {};
+      const bookCopiesPromises = selectedBooks.map(async (book) => {
+        // Get ALL copies of the book, not just availability summary
+        const copies = await window.api.getBookCopiesByBookId(book.id);
+        return { book, copies };
+      });
+
+      const results = await Promise.all(bookCopiesPromises);
+
+      // Organize by book
+      results.forEach(({ book, copies }) => {
+        // Filter to only include available copies
+        const availableCopies = copies.filter(
+          (copy) => copy.status === "Available"
+        );
+
+        if (availableCopies && availableCopies.length > 0) {
+          copiesData[book.id] = {
+            book,
+            copies: availableCopies,
+          };
+        } else {
+          // Include the book even if no copies are available
+          copiesData[book.id] = {
+            book,
+            copies: [],
+          };
+        }
+      });
+
+      setAvailableCopiesByBook(copiesData);
+
+      // Clear previous selections
+      setSelectedBookCopies([]);
+
+      // Open the dialog
+      setOpenCopySelectDialog(true);
+    } catch (error) {
+      console.error("Error fetching book copies:", error);
+      setSnackbar({
+        open: true,
+        message: `Error fetching available copies: ${error.message}`,
+        severity: "error",
+      });
+    } finally {
+      setLoadingCopies(false);
+    }
+  };
+
+  // Function to handle closing copy selection dialog
+  const handleCloseCopySelectDialog = () => {
+    setOpenCopySelectDialog(false);
+  };
+
+  // Function to toggle selection of a book copy
+  const handleToggleCopySelection = (copyId) => {
+    setSelectedBookCopies((prev) => {
+      if (prev.includes(copyId)) {
+        return prev.filter((id) => id !== copyId);
+      } else {
+        return [...prev, copyId];
+      }
+    });
+  };
+
+  // Function to select all copies of a book
+  const handleSelectAllCopiesOfBook = (bookId) => {
+    const bookData = availableCopiesByBook[bookId];
+    if (bookData && bookData.copies) {
+      const copyIds = bookData.copies.map((copy) => copy.id);
+      setSelectedBookCopies((prev) => {
+        const filtered = prev.filter(
+          (id) => !bookData.copies.some((copy) => copy.id === id)
+        );
+        return [...filtered, ...copyIds];
+      });
+    }
+  };
+
+  // Function to proceed with borrowing after copy selection
+  const handleCompleteBorrowing = async () => {
+    if (selectedBookCopies.length === 0) {
+      setSnackbar({
+        open: true,
+        message: "Please select at least one book copy",
+        severity: "error",
+      });
+      return;
+    }
+
+    try {
       const memberData = {
         member_id: selectedMember.id,
-        book_ids: selectedBooks.map((book) => book.id),
+        book_copies: selectedBookCopies,
         checkout_date: checkoutDate,
         due_date: dueDate,
       };
@@ -333,11 +617,25 @@ const LoanManagement = () => {
       // Generate a unique transaction ID for QR code
       const transactionId = `LOAN-${Date.now()}-${selectedMember.id}`;
 
+      // Get book details for the receipt
+      const booksForReceipt = [];
+      for (const bookId in availableCopiesByBook) {
+        const bookData = availableCopiesByBook[bookId];
+        const selectedCopiesForThisBook = bookData.copies.filter((copy) =>
+          selectedBookCopies.includes(copy.id)
+        );
+
+        if (selectedCopiesForThisBook.length > 0) {
+          booksForReceipt.push(bookData.book);
+        }
+      }
+
       // Prepare receipt data
       const receiptInfo = {
         transactionId,
         member: selectedMember,
-        books: selectedBooks,
+        books: booksForReceipt,
+        bookCopies: selectedBookCopies,
         checkoutDate,
         dueDate,
         loansIds: Array.isArray(result) ? result.map((loan) => loan.id) : [],
@@ -353,7 +651,105 @@ const LoanManagement = () => {
 
       setSnackbar({
         open: true,
-        message: `${selectedBooks.length} books borrowed successfully`,
+        message: `${selectedBookCopies.length} book copies borrowed successfully`,
+        severity: "success",
+      });
+
+      // Close the copy select dialog
+      setOpenCopySelectDialog(false);
+
+      // Refresh the loans list
+      fetchLoansByTab(activeTab);
+
+      // Refresh available books
+      const updatedBooks = await window.api.getAllBooks();
+      setBooks(updatedBooks);
+
+      // Close the borrow dialog
+      setOpenBorrowDialog(false);
+
+      // Reset state
+      setSelectedMember(null);
+      setSelectedBooks([]);
+      setSelectedBookCopies([]);
+    } catch (error) {
+      console.error("Error borrowing books:", error);
+      setSnackbar({
+        open: true,
+        message: `Error: ${error.message || "Failed to borrow books"}`,
+        severity: "error",
+      });
+    }
+  };
+
+  // Update the existing handleBorrowBooks function to call the copy selection dialog
+  const handleBorrowBooks = async () => {
+    if (!selectedMember) {
+      setSnackbar({
+        open: true,
+        message: "Please select a member",
+        severity: "error",
+      });
+      return;
+    }
+
+    if (selectedBookCopies.length === 0) {
+      setSnackbar({
+        open: true,
+        message: "Please select at least one book copy",
+        severity: "error",
+      });
+      return;
+    }
+
+    try {
+      const memberData = {
+        member_id: selectedMember.id,
+        book_copies: selectedBookCopies,
+        checkout_date: checkoutDate,
+        due_date: dueDate,
+      };
+
+      const result = await window.api.borrowBooks(memberData);
+
+      // Generate a unique transaction ID for QR code
+      const transactionId = `LOAN-${Date.now()}-${selectedMember.id}`;
+
+      // Get book details for the receipt
+      const booksForReceipt = [];
+      for (const bookId in availableCopiesByBook) {
+        const bookData = availableCopiesByBook[bookId];
+        const selectedCopiesForThisBook = bookData.copies.filter((copy) =>
+          selectedBookCopies.includes(copy.id)
+        );
+
+        if (selectedCopiesForThisBook.length > 0) {
+          booksForReceipt.push(bookData.book);
+        }
+      }
+
+      // Prepare receipt data
+      const receiptInfo = {
+        transactionId,
+        member: selectedMember,
+        books: booksForReceipt,
+        bookCopies: selectedBookCopies,
+        checkoutDate,
+        dueDate,
+        loansIds: Array.isArray(result) ? result.map((loan) => loan.id) : [],
+      };
+
+      setReceiptData(receiptInfo);
+
+      // Generate QR code
+      await generateQRData(receiptInfo);
+
+      // Show receipt
+      setOpenReceiptDialog(true);
+
+      setSnackbar({
+        open: true,
+        message: `${selectedBookCopies.length} book copies borrowed successfully`,
         severity: "success",
       });
 
@@ -364,8 +760,14 @@ const LoanManagement = () => {
       const updatedBooks = await window.api.getAllBooks();
       setBooks(updatedBooks);
 
-      // Close the dialog
-      handleCloseBorrowDialog();
+      // Close the borrow dialog
+      setOpenBorrowDialog(false);
+
+      // Reset state
+      setSelectedMember(null);
+      setSelectedBooks([]);
+      setSelectedBookCopies([]);
+      setAvailableCopiesByBook({});
     } catch (error) {
       console.error("Error borrowing books:", error);
       setSnackbar({
@@ -380,7 +782,7 @@ const LoanManagement = () => {
     if (selectedLoans.length === 0) {
       setSnackbar({
         open: true,
-        message: "Please select at least one loan to return",
+        message: "Please select at least one book to return",
         severity: "error",
       });
       return;
@@ -388,27 +790,116 @@ const LoanManagement = () => {
 
     try {
       await window.api.returnBooks(selectedLoans.map((loan) => loan.id));
-
       setSnackbar({
         open: true,
-        message: `${selectedLoans.length} books returned successfully`,
+        message: `Successfully returned ${selectedLoans.length} book(s)`,
         severity: "success",
       });
-
-      // Refresh the loans list
       fetchLoansByTab(activeTab);
-
-      // Refresh available books
-      const updatedBooks = await window.api.getAllBooks();
-      setBooks(updatedBooks);
-
-      // Close the dialog
-      handleCloseReturnDialog();
+      setOpenReturnDialog(false);
     } catch (error) {
       console.error("Error returning books:", error);
       setSnackbar({
         open: true,
-        message: `Error: ${error.message || "Failed to return books"}`,
+        message: `Error returning books: ${error.message}`,
+        severity: "error",
+      });
+    }
+  };
+
+  // Handle returning a single book directly from the table
+  const handleReturnSingleBook = async (loanId) => {
+    try {
+      if (!loanId) {
+        console.error("Error: Missing loan ID");
+        setSnackbar({
+          open: true,
+          message: "Error: Missing loan ID",
+          severity: "error",
+        });
+        return;
+      }
+
+      console.log("Returning loan with ID:", loanId);
+      await window.api.returnBooks([loanId]);
+      setSnackbar({
+        open: true,
+        message: "Book successfully returned",
+        severity: "success",
+      });
+      fetchLoansByTab(activeTab);
+    } catch (error) {
+      console.error("Error returning book:", error);
+      setSnackbar({
+        open: true,
+        message: `Error returning book: ${error.message || "Unknown error"}`,
+        severity: "error",
+      });
+    }
+  };
+
+  // Generate receipt for a single loan
+  const handleGenerateReceipt = async (loan) => {
+    try {
+      if (!loan) {
+        console.error("Error: Missing loan data");
+        setSnackbar({
+          open: true,
+          message: "Error: Missing loan data",
+          severity: "error",
+        });
+        return;
+      }
+
+      console.log("Generating receipt for loan:", loan);
+
+      // Create book object from loan data
+      const book = {
+        id: loan.book_id,
+        title: loan.book_title,
+        author: loan.book_author,
+        isbn: loan.book_isbn,
+        cover_color: loan.book_color,
+        front_cover: loan.book_cover,
+      };
+
+      // Create member object from loan data
+      const member = {
+        id: loan.member_id,
+        name: loan.member_name,
+        email: loan.member_email,
+      };
+
+      // Prepare receipt data
+      const receiptInfo = {
+        transactionId: `LOAN-${Date.now()}-${loan.member_id}`,
+        member: member,
+        checkoutDate: loan.checkout_date,
+        dueDate: loan.due_date,
+        books: [book],
+        bookCopies: [
+          {
+            id: loan.book_copy_id,
+            barcode: loan.book_barcode,
+            locationCode: loan.book_location_code,
+          },
+        ],
+      };
+
+      setReceiptData(receiptInfo);
+
+      // Generate QR code data
+      await generateQRData(receiptInfo);
+
+      // Show receipt
+      setOpenReceiptDialog(true);
+    } catch (error) {
+      console.error("Error generating receipt:", error);
+      setSnackbar({
+        open: true,
+        message: `Error generating receipt: ${
+          error.message || "Unknown error"
+        }`,
         severity: "error",
       });
     }
@@ -516,9 +1007,51 @@ const LoanManagement = () => {
     setOpenMemberSelectDialog(false);
   };
 
+  // Update the handleOpenBookSelectDialog to directly show copies after book selection
   const handleOpenBookSelectDialog = () => {
-    setBookSearchTerm("");
     setOpenBookSelectDialog(true);
+  };
+
+  // Update the handleBookSelect to immediately fetch available copies
+  const handleBookSelect = async (book) => {
+    // Add the book to selectedBooks
+    setSelectedBooks((prev) => {
+      // Check if book is already selected
+      if (prev.some((b) => b.id === book.id)) {
+        return prev;
+      }
+      return [...prev, book];
+    });
+
+    // Immediately after selecting a book, fetch its available copies
+    try {
+      setLoadingCopies(true);
+      // Get ALL copies of the book
+      const copies = await window.api.getBookCopiesByBookId(book.id);
+
+      // Filter to only available copies
+      const availableCopies = copies.filter(
+        (copy) => copy.status === "Available"
+      );
+
+      // Update the availableCopiesByBook state
+      setAvailableCopiesByBook((prev) => ({
+        ...prev,
+        [book.id]: {
+          book,
+          copies: availableCopies || [],
+        },
+      }));
+    } catch (error) {
+      console.error("Error fetching book copies:", error);
+      setSnackbar({
+        open: true,
+        message: `Error fetching available copies: ${error.message}`,
+        severity: "error",
+      });
+    } finally {
+      setLoadingCopies(false);
+    }
   };
 
   const handleCloseBookSelectDialog = () => {
@@ -530,14 +1063,26 @@ const LoanManagement = () => {
     setOpenMemberSelectDialog(false);
   };
 
-  const handleBookSelect = (book) => {
-    if (!selectedBooks.some((selectedBook) => selectedBook.id === book.id)) {
-      setSelectedBooks([...selectedBooks, book]);
-    }
-  };
-
   const handleRemoveBook = (bookId) => {
+    // Remove the book from selectedBooks array
     setSelectedBooks(selectedBooks.filter((book) => book.id !== bookId));
+
+    // Also remove any selected copies from this book
+    if (availableCopiesByBook[bookId]?.copies) {
+      const copyIdsToRemove = availableCopiesByBook[bookId].copies.map(
+        (copy) => copy.id
+      );
+      setSelectedBookCopies((prev) =>
+        prev.filter((copyId) => !copyIdsToRemove.includes(copyId))
+      );
+    }
+
+    // Remove the book's entries from availableCopiesByBook
+    setAvailableCopiesByBook((prev) => {
+      const newState = { ...prev };
+      delete newState[bookId];
+      return newState;
+    });
   };
 
   const handleMemberSearchChange = (event) => {
@@ -1299,6 +1844,121 @@ const LoanManagement = () => {
     getCameraDevices();
   };
 
+  // Add a new function to repair the database
+  const handleRepairDatabase = async () => {
+    setIsRepairing(true);
+    try {
+      // Update the loans table schema
+      await window.api.updateLoansTable();
+
+      // Update book copies table schema
+      await window.api.updateBookCopiesTable();
+
+      // Call our new repair function to fix missing book_id fields
+      try {
+        const repairResult = await window.api.repairDatabase();
+        console.log("Database repair result:", repairResult);
+
+        if (repairResult && repairResult.success) {
+          console.log(
+            `Updated ${
+              repairResult.updatedLoans?.length || 0
+            } loans with book details`
+          );
+        }
+      } catch (repairError) {
+        console.error("Error during loan data repair:", repairError);
+        // Continue with the process even if this specific repair fails
+      }
+
+      setSnackbar({
+        open: true,
+        message: "Database successfully updated. Reloading data...",
+        severity: "success",
+      });
+
+      // Reload data using the existing fetchLoansByTab function
+      await fetchLoansByTab(activeTab);
+
+      // Also refresh the members and books lists
+      const membersData = await window.api.getAllMembers();
+      setMembers(membersData);
+
+      const booksData = await window.api.getAllBooks();
+      setBooks(booksData);
+    } catch (error) {
+      console.error("Error repairing database:", error);
+      setSnackbar({
+        open: true,
+        message:
+          "Failed to repair database: " + (error.message || "Unknown error"),
+        severity: "error",
+      });
+    } finally {
+      setIsRepairing(false);
+    }
+  };
+
+  // Function to handle QR code popup
+  const handleShowQRCode = async (loan, event) => {
+    try {
+      if (!loan || !loan.id) {
+        console.error("Error: Missing loan data or invalid loan ID");
+        setSnackbar({
+          open: true,
+          message: "Error: Missing loan data",
+          severity: "error",
+        });
+        return;
+      }
+
+      console.log("Generating QR code for loan:", loan.id);
+
+      // Create loan QR data
+      const qrData = {
+        transactionId: `LOAN-${Date.now()}-${loan.member_id}`,
+        loanIds: [loan.id],
+      };
+
+      // Generate QR code
+      const qrCodeUrl = await QRCode.toDataURL(JSON.stringify(qrData), {
+        width: 150,
+        margin: 1,
+      });
+
+      // Make sure the event target still exists in the DOM before using it
+      if (
+        event &&
+        event.currentTarget &&
+        document.contains(event.currentTarget)
+      ) {
+        setCurrentLoanQR(qrCodeUrl);
+        setQrPopoverAnchor(event.currentTarget);
+      } else {
+        // If the event target is no longer in the DOM, show an error
+        console.warn("Button element is no longer in the DOM");
+        setSnackbar({
+          open: true,
+          message: "Could not show QR code. Please try again.",
+          severity: "warning",
+        });
+      }
+    } catch (error) {
+      console.error("Error generating QR code:", error);
+      setSnackbar({
+        open: true,
+        message: `Error generating QR code: ${
+          error.message || "Unknown error"
+        }`,
+        severity: "error",
+      });
+    }
+  };
+
+  const handleCloseQRPopover = () => {
+    setQrPopoverAnchor(null);
+  };
+
   if (loading) {
     return (
       <Box sx={{ display: "flex", justifyContent: "center", mt: 10 }}>
@@ -1353,8 +2013,28 @@ const LoanManagement = () => {
             color="secondary"
             startIcon={<QrCodeScannerIcon />}
             onClick={handleOpenQRScannerDialog}
+            sx={{ mr: 2 }}
           >
             Scan QR
+          </Button>
+          <Button
+            variant="outlined"
+            color="warning"
+            startIcon={<AutorenewIcon />}
+            onClick={handleRepairDatabase}
+            disabled={isRepairing}
+          >
+            {isRepairing ? "Updating..." : "Update Schema"}
+          </Button>
+        </Box>
+        <Box sx={{ display: "flex", gap: 2 }}>
+          <Button
+            variant="outlined"
+            color="error"
+            startIcon={<CloseIcon />}
+            onClick={handleOpenClearLoansDialog}
+          >
+            Clear All Loans
           </Button>
         </Box>
       </Box>
@@ -1392,12 +2072,36 @@ const LoanManagement = () => {
         />
       </Paper>
 
+      {/* Add a message for users when there's a database error */}
+      {loans.length === 0 && !loading && (
+        <Paper
+          elevation={3}
+          sx={{ p: 3, mb: 3, bgcolor: "rgba(255, 243, 224, 0.8)" }}
+        >
+          <Typography variant="h6" color="warning.dark" gutterBottom>
+            <WarningIcon sx={{ mr: 1, verticalAlign: "middle" }} />
+            Database Schema Issue Detected
+          </Typography>
+          <Typography variant="body1" paragraph>
+            It appears there might be an issue with the loans table in the
+            database. This usually happens when the application has been updated
+            with new features.
+          </Typography>
+          <Typography variant="body1" paragraph>
+            Click the "Update Schema" button above to fix this issue.
+          </Typography>
+        </Paper>
+      )}
+
       <TableContainer component={Paper} sx={{ borderRadius: 2 }}>
         <Table>
           <TableHead sx={{ bgcolor: "var(--secondary-dark)" }}>
             <TableRow>
               <TableCell sx={{ color: "white", fontWeight: "bold" }}>
                 Book
+              </TableCell>
+              <TableCell sx={{ color: "white", fontWeight: "bold" }}>
+                Copy Details
               </TableCell>
               <TableCell sx={{ color: "white", fontWeight: "bold" }}>
                 Member
@@ -1410,6 +2114,9 @@ const LoanManagement = () => {
               </TableCell>
               <TableCell sx={{ color: "white", fontWeight: "bold" }}>
                 Status
+              </TableCell>
+              <TableCell sx={{ color: "white", fontWeight: "bold" }}>
+                Actions
               </TableCell>
             </TableRow>
           </TableHead>
@@ -1464,6 +2171,14 @@ const LoanManagement = () => {
                     </Box>
                   </TableCell>
                   <TableCell>
+                    <Typography variant="body2" sx={{ fontWeight: "medium" }}>
+                      Barcode: {loan.book_barcode}
+                    </Typography>
+                    <Typography variant="caption" color="textSecondary">
+                      Location: {loan.book_location_code}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
                     <Typography variant="body1">{loan.member_name}</Typography>
                     <Typography variant="caption" color="textSecondary">
                       {loan.member_email}
@@ -1478,11 +2193,53 @@ const LoanManagement = () => {
                     {formatDate(loan.due_date)}
                   </TableCell>
                   <TableCell>{renderLoanStatus(loan)}</TableCell>
+                  <TableCell>
+                    <Box sx={{ display: "flex", gap: 1 }}>
+                      <Tooltip title="Print Receipt">
+                        <IconButton
+                          size="small"
+                          color="primary"
+                          onClick={() => {
+                            console.log("Generating receipt for loan:", loan);
+                            handleGenerateReceipt(loan);
+                          }}
+                        >
+                          <ReceiptIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Show QR Code">
+                        <IconButton
+                          size="small"
+                          color="info"
+                          onClick={(e) => {
+                            console.log("Showing QR for loan:", loan);
+                            handleShowQRCode(loan, e);
+                          }}
+                        >
+                          <QrCodeIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                      {loan.status !== "Returned" && (
+                        <Tooltip title="Return Book">
+                          <IconButton
+                            size="small"
+                            color="success"
+                            onClick={() => {
+                              console.log("Returning loan:", loan);
+                              handleReturnSingleBook(loan.id);
+                            }}
+                          >
+                            <AssignmentReturnedIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                    </Box>
+                  </TableCell>
                 </TableRow>
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={5} align="center">
+                <TableCell colSpan={7} align="center">
                   <Box
                     sx={{
                       py: 3,
@@ -1521,11 +2278,16 @@ const LoanManagement = () => {
       <Dialog
         open={openBorrowDialog}
         onClose={handleCloseBorrowDialog}
-        maxWidth="md"
+        maxWidth="lg"
         fullWidth
       >
         <DialogTitle>
           <Typography variant="h6">Borrow Books</Typography>
+          {selectedMember && (
+            <Typography variant="subtitle2" sx={{ mt: 1 }}>
+              Member: {selectedMember.name}
+            </Typography>
+          )}
         </DialogTitle>
         <DialogContent>
           <Grid container spacing={3} sx={{ mt: 0.5 }}>
@@ -1657,67 +2419,210 @@ const LoanManagement = () => {
               />
             </Grid>
 
+            {/* Selected Books Section */}
             {selectedBooks.length > 0 && (
               <Grid item xs={12}>
-                <Typography variant="subtitle1" gutterBottom>
+                <Typography variant="subtitle1" gutterBottom sx={{ mt: 2 }}>
                   Selected Books ({selectedBooks.length})
                 </Typography>
-                <Box sx={{ maxHeight: "250px", overflow: "auto" }}>
+                <Box sx={{ mb: 3 }}>
                   {selectedBooks.map((book) => (
-                    <Card key={book.id} sx={{ mb: 1 }}>
-                      <CardContent
-                        sx={{ py: 1, px: 2, "&:last-child": { pb: 1 } }}
-                      >
+                    <Card key={book.id} sx={{ mb: 2 }}>
+                      <CardContent>
                         <Box
                           sx={{
                             display: "flex",
-                            alignItems: "center",
+                            alignItems: "flex-start",
                             justifyContent: "space-between",
+                            mb: 2,
                           }}
                         >
-                          <Box sx={{ display: "flex", alignItems: "center" }}>
+                          <Box
+                            sx={{ display: "flex", alignItems: "flex-start" }}
+                          >
                             {getBookCoverDisplay(book)}
                             <Box>
                               <Typography
-                                variant="body2"
+                                variant="body1"
                                 sx={{ fontWeight: "medium" }}
                               >
                                 {book.title}
                               </Typography>
                               <Typography
-                                variant="caption"
+                                variant="body2"
                                 color="text.secondary"
                               >
                                 by {book.author}
                               </Typography>
+                              {book.isbn && (
+                                <Typography
+                                  variant="caption"
+                                  display="block"
+                                  color="text.secondary"
+                                >
+                                  ISBN: {book.isbn}
+                                </Typography>
+                              )}
+                              <Chip
+                                size="small"
+                                label={book.category || "Uncategorized"}
+                                sx={{ mt: 0.5, mr: 1 }}
+                              />
                             </Box>
                           </Box>
-                          <IconButton
-                            size="small"
-                            onClick={() => handleRemoveBook(book.id)}
-                            sx={{ color: "error.main" }}
-                          >
-                            <CloseIcon />
-                          </IconButton>
+                          <Box>
+                            <IconButton
+                              size="small"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveBook(book.id);
+                              }}
+                              color="error"
+                            >
+                              <Delete fontSize="small" />
+                            </IconButton>
+                          </Box>
                         </Box>
+
+                        {/* Available Copies for this book */}
+                        <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                          Available Copies:
+                        </Typography>
+
+                        {loadingCopies ? (
+                          <Box
+                            sx={{
+                              display: "flex",
+                              justifyContent: "center",
+                              p: 2,
+                            }}
+                          >
+                            <CircularProgress size={24} />
+                          </Box>
+                        ) : availableCopiesByBook[book.id]?.copies?.length >
+                          0 ? (
+                          <TableContainer component={Paper} variant="outlined">
+                            <Table size="small">
+                              <TableHead>
+                                <TableRow>
+                                  <TableCell padding="checkbox">
+                                    Select
+                                  </TableCell>
+                                  <TableCell>Barcode</TableCell>
+                                  <TableCell>Location</TableCell>
+                                  <TableCell>Shelf</TableCell>
+                                  <TableCell>Condition</TableCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {availableCopiesByBook[book.id]?.copies.map(
+                                  (copy) => (
+                                    <TableRow
+                                      key={copy.id}
+                                      onClick={() =>
+                                        handleToggleCopySelection(copy.id)
+                                      }
+                                      sx={{
+                                        cursor: "pointer",
+                                        bgcolor: selectedBookCopies.includes(
+                                          copy.id
+                                        )
+                                          ? "rgba(25, 118, 210, 0.08)"
+                                          : "inherit",
+                                        "&:hover": {
+                                          bgcolor: selectedBookCopies.includes(
+                                            copy.id
+                                          )
+                                            ? "rgba(25, 118, 210, 0.12)"
+                                            : "rgba(0, 0, 0, 0.04)",
+                                        },
+                                      }}
+                                    >
+                                      <TableCell padding="checkbox">
+                                        <Checkbox
+                                          checked={selectedBookCopies.includes(
+                                            copy.id
+                                          )}
+                                          onChange={() =>
+                                            handleToggleCopySelection(copy.id)
+                                          }
+                                          onClick={(e) => e.stopPropagation()}
+                                        />
+                                      </TableCell>
+                                      <TableCell>
+                                        {copy.barcode || "N/A"}
+                                      </TableCell>
+                                      <TableCell>
+                                        {copy.location_code || "N/A"}
+                                      </TableCell>
+                                      <TableCell>
+                                        {copy.shelf_name
+                                          ? `${copy.shelf_name}`
+                                          : "Not on shelf"}
+                                      </TableCell>
+                                      <TableCell>
+                                        <Chip
+                                          size="small"
+                                          label={copy.condition || "Unknown"}
+                                          color={
+                                            copy.condition === "New"
+                                              ? "success"
+                                              : copy.condition === "Good"
+                                              ? "info"
+                                              : copy.condition === "Fair"
+                                              ? "warning"
+                                              : "error"
+                                          }
+                                          variant="outlined"
+                                        />
+                                      </TableCell>
+                                    </TableRow>
+                                  )
+                                )}
+                              </TableBody>
+                            </Table>
+                          </TableContainer>
+                        ) : (
+                          <Alert severity="info" sx={{ mb: 1 }}>
+                            No available copies for this book
+                          </Alert>
+                        )}
                       </CardContent>
                     </Card>
                   ))}
                 </Box>
               </Grid>
             )}
+
+            {/* Selected Copies Summary */}
+            {selectedBookCopies.length > 0 && (
+              <Grid item xs={12}>
+                <Paper sx={{ p: 2, bgcolor: "primary.light", color: "white" }}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: "bold" }}>
+                    {selectedBookCopies.length}{" "}
+                    {selectedBookCopies.length === 1 ? "copy" : "copies"}{" "}
+                    selected for borrowing
+                  </Typography>
+                </Paper>
+              </Grid>
+            )}
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={handleCloseBorrowDialog}>Cancel</Button>
+          <Button onClick={handleCloseBorrowDialog} color="inherit">
+            Cancel
+          </Button>
           <Button
             onClick={handleBorrowBooks}
             variant="contained"
             color="primary"
             startIcon={<LibraryBooksIcon />}
-            disabled={!selectedMember || selectedBooks.length === 0}
+            disabled={!selectedMember || selectedBookCopies.length === 0}
           >
-            Borrow Books
+            Borrow{" "}
+            {selectedBookCopies.length > 0
+              ? `${selectedBookCopies.length} Copies`
+              : "Books"}
           </Button>
         </DialogActions>
       </Dialog>
@@ -2360,15 +3265,34 @@ const LoanManagement = () => {
                         Title
                       </TableCell>
                       <TableCell padding="none">Author</TableCell>
+                      <TableCell padding="none">Copy Details</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {receiptData?.books?.map((book) => (
+                    {receiptData?.books?.map((book, index) => (
                       <TableRow key={book.id}>
                         <TableCell padding="none" sx={{ pl: 1 }}>
                           {book.title}
                         </TableCell>
                         <TableCell padding="none">{book.author}</TableCell>
+                        <TableCell padding="none">
+                          {receiptData?.bookCopies &&
+                          receiptData.bookCopies[index] ? (
+                            <Box>
+                              <Typography variant="caption" display="block">
+                                Barcode:{" "}
+                                {receiptData.bookCopies[index].barcode || "N/A"}
+                              </Typography>
+                              <Typography variant="caption" display="block">
+                                Location:{" "}
+                                {receiptData.bookCopies[index].locationCode ||
+                                  "N/A"}
+                              </Typography>
+                            </Box>
+                          ) : (
+                            "No copy details"
+                          )}
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -2843,6 +3767,71 @@ const LoanManagement = () => {
           {snackbar.message}
         </Alert>
       </Snackbar>
+
+      {/* Clear Loans Confirmation Dialog */}
+      <Dialog
+        open={openClearLoansDialog}
+        onClose={handleCloseClearLoansDialog}
+        aria-labelledby="clear-loans-dialog-title"
+      >
+        <DialogTitle id="clear-loans-dialog-title">Clear All Loans</DialogTitle>
+        <DialogContent>
+          <Typography>
+            This will delete ALL loans from the database and reset all checked
+            out book copies to "Available" status. This action cannot be undone.
+          </Typography>
+          <Typography sx={{ mt: 2, fontWeight: "bold", color: "error.main" }}>
+            Are you sure you want to proceed?
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseClearLoansDialog} color="primary">
+            Cancel
+          </Button>
+          <Button
+            onClick={handleClearAllLoans}
+            color="error"
+            variant="contained"
+            disabled={isClearingLoans}
+            startIcon={
+              isClearingLoans ? <CircularProgress size={20} /> : <CloseIcon />
+            }
+          >
+            {isClearingLoans ? "Clearing..." : "Clear All Loans"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* QR Code Popover */}
+      <Popover
+        open={Boolean(qrPopoverAnchor)}
+        anchorEl={qrPopoverAnchor}
+        onClose={handleCloseQRPopover}
+        anchorOrigin={{
+          vertical: "center",
+          horizontal: "right",
+        }}
+        transformOrigin={{
+          vertical: "center",
+          horizontal: "left",
+        }}
+      >
+        <Box sx={{ p: 2, textAlign: "center" }}>
+          {currentLoanQR && (
+            <>
+              <Box
+                component="img"
+                src={currentLoanQR}
+                alt="Loan QR Code"
+                sx={{ width: 150, height: 150 }}
+              />
+              <Typography variant="caption" sx={{ display: "block", mt: 1 }}>
+                Scan to return this book
+              </Typography>
+            </>
+          )}
+        </Box>
+      </Popover>
     </Box>
   );
 };

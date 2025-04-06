@@ -132,6 +132,208 @@ const initDatabase = async () => {
       }
     }
 
+    // Shelves table
+    const hasShelves = await db.schema.hasTable("shelves");
+    if (!hasShelves) {
+      await db.schema.createTable("shelves", (table) => {
+        table.increments("id").primary();
+        table.string("name").notNullable();
+        table.string("location").notNullable();
+        table.string("section").nullable();
+        table.text("description").nullable();
+        table.string("code").nullable(); // Adding a code field for shelf identification
+        table.integer("capacity").defaultTo(100);
+        table.timestamp("created_at").defaultTo(db.fn.now());
+        table.timestamp("updated_at").defaultTo(db.fn.now());
+      });
+
+      // Add some sample shelves
+      await db("shelves").insert([
+        {
+          name: "Fiction A-M",
+          location: "Floor 1",
+          section: "Fiction",
+          description: "Fiction books, authors A-M",
+          code: "FIC-A",
+          capacity: 200,
+        },
+        {
+          name: "Fiction N-Z",
+          location: "Floor 1",
+          section: "Fiction",
+          description: "Fiction books, authors N-Z",
+          code: "FIC-Z",
+          capacity: 200,
+        },
+        {
+          name: "Science Fiction",
+          location: "Floor 1",
+          section: "Sci-Fi",
+          description: "Science Fiction and Fantasy books",
+          code: "SCI",
+          capacity: 150,
+        },
+        {
+          name: "Classics",
+          location: "Floor 2",
+          section: "Classics",
+          description: "Classic literature",
+          code: "CLS",
+          capacity: 100,
+        },
+        {
+          name: "Reference",
+          location: "Floor 2",
+          section: "Reference",
+          description: "Reference books and encyclopedias",
+          code: "REF",
+          capacity: 75,
+        },
+      ]);
+    } else {
+      // Check if section field exists, and add it if it doesn't
+      const hasSectionField = await db.schema.hasColumn("shelves", "section");
+      if (!hasSectionField) {
+        await db.schema.table("shelves", (table) => {
+          table.string("section").nullable();
+        });
+        console.log("Added section field to shelves table");
+      }
+
+      // Check if code field exists, and add it if it doesn't
+      const hasCodeField = await db.schema.hasColumn("shelves", "code");
+      if (!hasCodeField) {
+        await db.schema.table("shelves", (table) => {
+          table.string("code").nullable();
+        });
+        console.log("Added code field to shelves table");
+
+        // Update existing shelves with codes based on section
+        const shelves = await db("shelves").select("*");
+        for (const shelf of shelves) {
+          const sectionCode = shelf.section
+            ? shelf.section.substring(0, 3).toUpperCase()
+            : "GEN";
+          const shelfCode = `${sectionCode}-${shelf.id}`;
+
+          await db("shelves")
+            .where({ id: shelf.id })
+            .update({ code: shelfCode });
+        }
+      }
+    }
+
+    // Book Copies table
+    const hasBookCopies = await db.schema.hasTable("book_copies");
+    if (!hasBookCopies) {
+      await db.schema.createTable("book_copies", (table) => {
+        table.increments("id").primary();
+        table
+          .integer("book_id")
+          .unsigned()
+          .references("id")
+          .inTable("books")
+          .notNullable();
+        table
+          .integer("shelf_id")
+          .unsigned()
+          .references("id")
+          .inTable("shelves")
+          .nullable();
+        table.string("barcode").unique().notNullable();
+        table.string("location_code").nullable();
+        table.string("status").defaultTo("Available");
+        table.text("condition").nullable();
+        table.date("acquisition_date").defaultTo(db.fn.now());
+        table.timestamp("created_at").defaultTo(db.fn.now());
+        table.timestamp("updated_at").defaultTo(db.fn.now());
+      });
+
+      // Generate book copies for sample books
+      const books = await db("books").select("id", "title");
+      const shelves = await db("shelves").select("id", "section");
+
+      const bookCopies = [];
+
+      for (const book of books) {
+        // Determine appropriate shelf based on book category or random assignment
+        let shelf = shelves[Math.floor(Math.random() * shelves.length)];
+
+        // Create 1-5 copies of each book
+        const numCopies = Math.floor(Math.random() * 5) + 1;
+
+        for (let i = 1; i <= numCopies; i++) {
+          const barcode = `B${book.id.toString().padStart(3, "0")}-C${i
+            .toString()
+            .padStart(2, "0")}`;
+          const locationCode = `${shelf.section
+            .substring(0, 3)
+            .toUpperCase()}-${book.id.toString().padStart(3, "0")}-${i}`;
+
+          bookCopies.push({
+            book_id: book.id,
+            shelf_id: shelf.id,
+            barcode: barcode,
+            location_code: locationCode,
+            status: i === 1 && book.id % 3 === 0 ? "Checked Out" : "Available",
+            condition: ["New", "Good", "Fair", "Poor"][
+              Math.floor(Math.random() * 4)
+            ],
+            acquisition_date: new Date(
+              Date.now() -
+                Math.floor(Math.random() * 365 * 2) * 24 * 60 * 60 * 1000
+            ),
+          });
+        }
+      }
+
+      if (bookCopies.length > 0) {
+        await db("book_copies").insert(bookCopies);
+        console.log(`Created ${bookCopies.length} book copies`);
+      }
+
+      // Update the loans table to reference book_copies instead of books directly
+      const hasLoanBookCopyIdColumn = await db.schema.hasColumn(
+        "loans",
+        "book_copy_id"
+      );
+
+      if (!hasLoanBookCopyIdColumn) {
+        await db.schema.table("loans", (table) => {
+          table
+            .integer("book_copy_id")
+            .unsigned()
+            .references("id")
+            .inTable("book_copies")
+            .nullable();
+        });
+        console.log("Added book_copy_id column to loans table");
+      }
+    } else {
+      // Check for missing columns in book_copies table
+      const hasConditionColumn = await db.schema.hasColumn(
+        "book_copies",
+        "condition"
+      );
+      if (!hasConditionColumn) {
+        console.log("Adding condition column to book_copies table");
+        await db.schema.table("book_copies", (table) => {
+          table.text("condition").nullable();
+        });
+      }
+
+      const hasAcquisitionDateColumn = await db.schema.hasColumn(
+        "book_copies",
+        "acquisition_date"
+      );
+      if (!hasAcquisitionDateColumn) {
+        console.log("Adding acquisition_date column to book_copies table");
+        await db.schema.table("book_copies", (table) => {
+          table.date("acquisition_date").defaultTo(db.fn.now());
+        });
+      }
+    }
+
     // Members table
     const hasMembers = await db.schema.hasTable("members");
     if (!hasMembers) {
@@ -201,7 +403,11 @@ const initDatabase = async () => {
     if (!hasLoans) {
       await db.schema.createTable("loans", (table) => {
         table.increments("id").primary();
-        table.integer("book_id").unsigned().references("id").inTable("books");
+        table
+          .integer("book_copy_id")
+          .unsigned()
+          .references("id")
+          .inTable("book_copies");
         table
           .integer("member_id")
           .unsigned()
@@ -224,14 +430,14 @@ const initDatabase = async () => {
 
       await db("loans").insert([
         {
-          book_id: 2,
+          book_copy_id: 2,
           member_id: 1,
           checkout_date: currentDate,
           due_date: dueDate,
           status: "Borrowed",
         },
         {
-          book_id: 5,
+          book_copy_id: 5,
           member_id: 2,
           checkout_date: currentDate,
           due_date: dueDate,
@@ -386,6 +592,19 @@ const initDatabase = async () => {
     }
 
     console.log("Database initialized successfully!");
+
+    // Update schema for existing tables
+    // This ensures all required columns exist on existing tables
+    await updateMembersTable();
+    await updateBooksTable();
+    await updateLoansTable();
+    await updateBookCopiesTable();
+    await updateShelvesTable();
+
+    // Clear all loans on startup
+    await clearLoans();
+
+    return db;
   } catch (error) {
     console.error("Error initializing database:", error);
     throw error;
@@ -452,14 +671,22 @@ const deleteMember = (id) => db("members").where({ id }).del();
 
 const getAllLoans = () =>
   db("loans")
-    .join("books", "loans.book_id", "books.id")
+    .join("book_copies", "loans.book_copy_id", "book_copies.id")
+    .join("books", "book_copies.book_id", "books.id")
     .join("members", "loans.member_id", "members.id")
     .select(
       "loans.*",
+      "book_copies.barcode as book_barcode",
+      "book_copies.location_code as book_location_code",
+      "book_copies.status as book_status",
+      "book_copies.condition as book_condition",
+      "book_copies.acquisition_date as book_acquisition_date",
+      "books.id as book_id",
       "books.title as book_title",
       "books.isbn as book_isbn",
-      "books.front_cover as book_cover",
+      "books.author as book_author",
       "books.cover_color as book_color",
+      "books.front_cover as book_cover",
       "members.name as member_name",
       "members.email as member_email"
     );
@@ -483,15 +710,23 @@ const getLoansByMember = (memberId) => {
   id = parseInt(id, 10);
 
   return db("loans")
-    .join("books", "loans.book_id", "books.id")
+    .join("book_copies", "loans.book_copy_id", "book_copies.id")
+    .join("books", "book_copies.book_id", "books.id")
     .join("members", "loans.member_id", "members.id")
     .where("loans.member_id", id)
     .select(
       "loans.*",
+      "book_copies.barcode as book_barcode",
+      "book_copies.location_code as book_location_code",
+      "book_copies.status as book_status",
+      "book_copies.condition as book_condition",
+      "book_copies.acquisition_date as book_acquisition_date",
+      "books.id as book_id",
       "books.title as book_title",
       "books.isbn as book_isbn",
-      "books.front_cover as book_cover",
+      "books.author as book_author",
       "books.cover_color as book_color",
+      "books.front_cover as book_cover",
       "members.name as member_name",
       "members.email as member_email"
     )
@@ -507,16 +742,24 @@ const getLoansByMember = (memberId) => {
 
 const getActiveLoans = () =>
   db("loans")
-    .join("books", "loans.book_id", "books.id")
+    .join("book_copies", "loans.book_copy_id", "book_copies.id")
+    .join("books", "book_copies.book_id", "books.id")
     .join("members", "loans.member_id", "members.id")
     .whereNull("loans.return_date")
     .andWhere("loans.status", "!=", "Returned")
     .select(
       "loans.*",
+      "book_copies.barcode as book_barcode",
+      "book_copies.location_code as book_location_code",
+      "book_copies.status as book_status",
+      "book_copies.condition as book_condition",
+      "book_copies.acquisition_date as book_acquisition_date",
+      "books.id as book_id",
       "books.title as book_title",
       "books.isbn as book_isbn",
-      "books.front_cover as book_cover",
+      "books.author as book_author",
       "books.cover_color as book_color",
+      "books.front_cover as book_cover",
       "members.name as member_name",
       "members.email as member_email"
     );
@@ -524,16 +767,24 @@ const getActiveLoans = () =>
 const getOverdueLoans = () => {
   const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
   return db("loans")
-    .join("books", "loans.book_id", "books.id")
+    .join("book_copies", "loans.book_copy_id", "book_copies.id")
+    .join("books", "book_copies.book_id", "books.id")
     .join("members", "loans.member_id", "members.id")
     .whereNull("loans.return_date")
     .andWhere("loans.due_date", "<", today)
     .select(
       "loans.*",
+      "book_copies.barcode as book_barcode",
+      "book_copies.location_code as book_location_code",
+      "book_copies.status as book_status",
+      "book_copies.condition as book_condition",
+      "book_copies.acquisition_date as book_acquisition_date",
+      "books.id as book_id",
       "books.title as book_title",
       "books.isbn as book_isbn",
-      "books.front_cover as book_cover",
+      "books.author as book_author",
       "books.cover_color as book_color",
+      "books.front_cover as book_cover",
       "members.name as member_name",
       "members.email as member_email"
     );
@@ -577,7 +828,7 @@ const returnBook = (id, reviewData = {}) => {
     await trx("loans").where({ id }).update(updateData);
 
     // Update book status
-    await trx("books").where({ id: loan.book_id }).update({
+    await trx("book_copies").where({ id: loan.book_copy_id }).update({
       status: "Available",
       updated_at: new Date(),
     });
@@ -588,7 +839,7 @@ const returnBook = (id, reviewData = {}) => {
 
 const borrowBooks = (memberData) => {
   return db.transaction(async (trx) => {
-    const { member_id, book_id, book_ids, checkout_date, due_date } =
+    const { member_id, book_copy_id, book_copies, checkout_date, due_date } =
       memberData;
 
     // Validate member
@@ -601,38 +852,54 @@ const borrowBooks = (memberData) => {
       throw new Error("Member is not active");
     }
 
-    // Handle single book_id or multiple book_ids
-    const bookIdsArray = book_ids
-      ? Array.isArray(book_ids)
-        ? book_ids
-        : [book_ids]
-      : book_id
-      ? [book_id]
+    // Handle single book_copy_id or multiple book_copies
+    const bookCopiesArray = book_copies
+      ? Array.isArray(book_copies)
+        ? book_copies
+        : [book_copies]
+      : book_copy_id
+      ? [book_copy_id]
       : [];
 
-    if (bookIdsArray.length === 0) {
-      throw new Error("No book IDs provided");
+    if (bookCopiesArray.length === 0) {
+      throw new Error("No book copy IDs provided");
     }
 
-    console.log(`Borrowing books: ${bookIdsArray.join(", ")}`);
+    console.log(`Borrowing book copies: ${bookCopiesArray.join(", ")}`);
 
-    // Check if any of the books are already checked out
-    const unavailableBooks = await trx("books")
-      .whereIn("id", bookIdsArray)
+    // Check if any of the copies are already checked out
+    const unavailableBooks = await trx("book_copies")
+      .whereIn("id", bookCopiesArray)
       .andWhere("status", "!=", "Available")
-      .select("id", "title");
+      .select("id", "barcode");
 
     if (unavailableBooks.length > 0) {
       throw new Error(
-        `Some books are not available: ${unavailableBooks
-          .map((b) => b.title)
+        `Some book copies are not available: ${unavailableBooks
+          .map((b) => b.barcode)
           .join(", ")}`
       );
     }
 
-    // Create loans for each book
-    const loans = bookIdsArray.map((bookId) => ({
-      book_id: bookId,
+    // Get book details for each copy for logging purposes
+    const bookCopiesDetails = await trx("book_copies")
+      .join("books", "book_copies.book_id", "books.id")
+      .whereIn("book_copies.id", bookCopiesArray)
+      .select(
+        "book_copies.id",
+        "book_copies.barcode",
+        "books.id as book_id",
+        "books.title"
+      );
+
+    console.log(
+      "Book copies to borrow:",
+      bookCopiesDetails.map((b) => `${b.title} (${b.barcode})`).join(", ")
+    );
+
+    // Create loans for each book copy
+    const loans = bookCopiesArray.map((bookCopyId) => ({
+      book_copy_id: bookCopyId,
       member_id,
       checkout_date: checkout_date || new Date(),
       due_date: due_date || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // Default to 14 days
@@ -642,8 +909,8 @@ const borrowBooks = (memberData) => {
     // Insert all loans
     const insertedLoans = await trx("loans").insert(loans).returning("*");
 
-    // Update book status to "Checked Out"
-    await trx("books").whereIn("id", bookIdsArray).update({
+    // Update book copy status to "Checked Out"
+    await trx("book_copies").whereIn("id", bookCopiesArray).update({
       status: "Checked Out",
       updated_at: new Date(),
     });
@@ -671,8 +938,8 @@ const returnBooks = (loanIds) => {
     });
 
     // Update all books to available
-    const bookIds = loans.map((loan) => loan.book_id);
-    await trx("books").whereIn("id", bookIds).update({
+    const bookCopiesIds = loans.map((loan) => loan.book_copy_id);
+    await trx("book_copies").whereIn("id", bookCopiesIds).update({
       status: "Available",
       updated_at: today,
     });
@@ -736,8 +1003,8 @@ const returnBooksViaQRCode = (qrData) => {
       });
 
       // Update all books to available
-      const bookIds = activeLoans.map((loan) => loan.book_id);
-      await trx("books").whereIn("id", bookIds).update({
+      const bookCopiesIds = activeLoans.map((loan) => loan.book_copy_id);
+      await trx("book_copies").whereIn("id", bookCopiesIds).update({
         status: "Available",
         updated_at: today,
       });
@@ -1213,6 +1480,16 @@ const resetDatabase = async () => {
       console.log("Dropped members table");
     }
 
+    if (await db.schema.hasTable("book_copies")) {
+      await db.schema.dropTable("book_copies");
+      console.log("Dropped book_copies table");
+    }
+
+    if (await db.schema.hasTable("shelves")) {
+      await db.schema.dropTable("shelves");
+      console.log("Dropped shelves table");
+    }
+
     if (await db.schema.hasTable("books")) {
       await db.schema.dropTable("books");
       console.log("Dropped books table");
@@ -1232,6 +1509,522 @@ const resetDatabase = async () => {
   }
 };
 
+// Shelves Management Functions
+const getAllShelves = () => db("shelves").select("*");
+
+const getShelfById = (id) => {
+  console.log(`Looking up shelf with ID: ${id}`);
+  return db("shelves")
+    .where({ id })
+    .first()
+    .then((shelf) => {
+      if (!shelf) {
+        console.log(`No shelf found with ID ${id}`);
+      } else {
+        console.log(`Found shelf: ${shelf.name}`);
+      }
+      return shelf;
+    });
+};
+
+const addShelf = (shelf) => db("shelves").insert(shelf).returning("*");
+
+const updateShelf = (id, shelf) =>
+  db("shelves").where({ id }).update(shelf).returning("*");
+
+const deleteShelf = (id) => db("shelves").where({ id }).del();
+
+const getShelfContents = (shelfId) => {
+  return db("book_copies")
+    .join("books", "book_copies.book_id", "books.id")
+    .where("book_copies.shelf_id", shelfId)
+    .select(
+      "book_copies.*",
+      "books.title",
+      "books.author",
+      "books.isbn",
+      "books.category",
+      "books.front_cover",
+      "books.cover_color"
+    );
+};
+
+// Book Copies Management Functions
+const getAllBookCopies = () => {
+  return db("book_copies")
+    .join("books", "book_copies.book_id", "books.id")
+    .leftJoin("shelves", "book_copies.shelf_id", "shelves.id")
+    .select(
+      "book_copies.*",
+      "books.title",
+      "books.author",
+      "books.isbn",
+      "books.category",
+      "shelves.name as shelf_name",
+      "shelves.location as shelf_location"
+    );
+};
+
+const getBookCopyById = (id) => {
+  console.log(`Looking up book copy with ID: ${id}`);
+  return db("book_copies")
+    .join("books", "book_copies.book_id", "books.id")
+    .leftJoin("shelves", "book_copies.shelf_id", "shelves.id")
+    .where("book_copies.id", id)
+    .select(
+      "book_copies.*",
+      "books.title",
+      "books.author",
+      "books.isbn",
+      "books.category",
+      "shelves.name as shelf_name",
+      "shelves.location as shelf_location"
+    )
+    .first()
+    .then((bookCopy) => {
+      if (!bookCopy) {
+        console.log(`No book copy found with ID ${id}`);
+      } else {
+        console.log(`Found book copy: ${bookCopy.title} (${bookCopy.barcode})`);
+      }
+      return bookCopy;
+    });
+};
+
+const getBookCopiesByBookId = (bookId) => {
+  console.log(`Looking up copies for book with ID: ${bookId}`);
+  return db("book_copies")
+    .join("books", "book_copies.book_id", "books.id")
+    .leftJoin("shelves", "book_copies.shelf_id", "shelves.id")
+    .where("book_copies.book_id", bookId)
+    .select(
+      "book_copies.*",
+      "books.title",
+      "books.author",
+      "books.isbn",
+      "books.category",
+      "shelves.name as shelf_name",
+      "shelves.location as shelf_location"
+    )
+    .then((bookCopies) => {
+      console.log(`Found ${bookCopies.length} copies for book ID ${bookId}`);
+      return bookCopies;
+    });
+};
+
+const addBookCopy = (bookCopy) =>
+  db("book_copies").insert(bookCopy).returning("*");
+
+const updateBookCopy = (id, bookCopy) =>
+  db("book_copies").where({ id }).update(bookCopy).returning("*");
+
+const deleteBookCopy = (id) => db("book_copies").where({ id }).del();
+
+const moveBookCopy = (id, shelfId) => {
+  return db.transaction(async (trx) => {
+    const bookCopy = await trx("book_copies").where({ id }).first();
+
+    if (!bookCopy) {
+      throw new Error(`Book copy with ID ${id} not found`);
+    }
+
+    const shelf = await trx("shelves").where({ id: shelfId }).first();
+
+    if (!shelf) {
+      throw new Error(`Shelf with ID ${shelfId} not found`);
+    }
+
+    // Get the book information to update the location code
+    const book = await trx("books").where({ id: bookCopy.book_id }).first();
+
+    // Create a new location code based on the shelf section
+    const copyNumber = bookCopy.barcode.split("-C")[1];
+    const locationCode = `${shelf.section
+      .substring(0, 3)
+      .toUpperCase()}-${book.id.toString().padStart(3, "0")}-${copyNumber}`;
+
+    // Update the book copy with the new shelf ID and location code
+    await trx("book_copies").where({ id }).update({
+      shelf_id: shelfId,
+      location_code: locationCode,
+      updated_at: new Date(),
+    });
+
+    return { success: true, message: `Book copy moved to ${shelf.name}` };
+  });
+};
+
+// Function to get book availability summary
+const getBookAvailability = (bookId) => {
+  return db.transaction(async (trx) => {
+    // Get the book
+    const book = await trx("books").where({ id: bookId }).first();
+
+    if (!book) {
+      throw new Error(`Book with ID ${bookId} not found`);
+    }
+
+    // Get all copies of the book
+    const copies = await trx("book_copies")
+      .where({ book_id: bookId })
+      .select(
+        "id",
+        "barcode",
+        "status",
+        "location_code",
+        "shelf_id",
+        "condition"
+      );
+
+    // Count copies by status
+    const totalCopies = copies.length;
+    const availableCopies = copies.filter(
+      (copy) => copy.status === "Available"
+    ).length;
+    const checkedOutCopies = copies.filter(
+      (copy) => copy.status === "Checked Out"
+    ).length;
+    const damagedCopies = copies.filter(
+      (copy) => copy.condition === "Poor"
+    ).length;
+
+    // Get shelf information for available copies
+    const availableCopiesDetails = await Promise.all(
+      copies
+        .filter((copy) => copy.status === "Available")
+        .map(async (copy) => {
+          if (copy.shelf_id) {
+            const shelf = await trx("shelves")
+              .where({ id: copy.shelf_id })
+              .first();
+            return {
+              id: copy.id,
+              barcode: copy.barcode,
+              location_code: copy.location_code,
+              condition: copy.condition,
+              shelf: shelf
+                ? {
+                    id: shelf.id,
+                    name: shelf.name,
+                    location: shelf.location,
+                  }
+                : null,
+            };
+          } else {
+            return {
+              id: copy.id,
+              barcode: copy.barcode,
+              location_code: copy.location_code,
+              condition: copy.condition,
+              shelf: null,
+            };
+          }
+        })
+    );
+
+    return {
+      book_id: bookId,
+      title: book.title,
+      author: book.author,
+      isbn: book.isbn,
+      total_copies: totalCopies,
+      available_copies: availableCopies,
+      checked_out_copies: checkedOutCopies,
+      damaged_copies: damagedCopies,
+      available_copies_details: availableCopiesDetails,
+    };
+  });
+};
+
+const updateLoansTable = async () => {
+  try {
+    console.log("Checking loans table for required fields...");
+
+    // Check if loans table exists
+    const hasLoans = await db.schema.hasTable("loans");
+    if (!hasLoans) {
+      console.log(
+        "Loans table doesn't exist yet - it will be created during initialization"
+      );
+      return {
+        success: true,
+        message: "Loans table will be created during initialization",
+      };
+    }
+
+    // Check if book_copy_id column exists
+    const hasBookCopyIdColumn = await db.schema.hasColumn(
+      "loans",
+      "book_copy_id"
+    );
+    if (!hasBookCopyIdColumn) {
+      console.log("Adding book_copy_id column to loans table");
+
+      await db.schema.table("loans", (table) => {
+        table
+          .integer("book_copy_id")
+          .unsigned()
+          .references("id")
+          .inTable("book_copies")
+          .nullable();
+      });
+
+      console.log("Added book_copy_id column to loans table");
+
+      // Now we need to migrate any existing loans that might be using the old book_id column
+      // First check if there's a book_id column
+      const hasBookIdColumn = await db.schema.hasColumn("loans", "book_id");
+
+      if (hasBookIdColumn) {
+        console.log("Migrating data from book_id to book_copy_id...");
+
+        // Get all loans with book_id but no book_copy_id
+        const loansToMigrate = await db("loans")
+          .whereNotNull("book_id")
+          .whereNull("book_copy_id")
+          .select("*");
+
+        console.log(`Found ${loansToMigrate.length} loans to migrate`);
+
+        // For each loan, find a suitable book copy
+        for (const loan of loansToMigrate) {
+          // Find the first available book copy for this book
+          const bookCopy = await db("book_copies")
+            .where({ book_id: loan.book_id })
+            .first();
+
+          if (bookCopy) {
+            // Update the loan with the book copy
+            await db("loans").where({ id: loan.id }).update({
+              book_copy_id: bookCopy.id,
+              updated_at: new Date(),
+            });
+
+            console.log(
+              `Migrated loan ${loan.id} to use book copy ${bookCopy.id}`
+            );
+          } else {
+            console.log(
+              `Could not find book copy for book ${loan.book_id} for loan ${loan.id}`
+            );
+          }
+        }
+      }
+    } else {
+      console.log("Loans table already has book_copy_id column");
+    }
+
+    // Check for rating and review columns as well
+    const hasRatingColumn = await db.schema.hasColumn("loans", "rating");
+    const hasReviewColumn = await db.schema.hasColumn("loans", "review");
+
+    if (!hasRatingColumn) {
+      console.log("Adding rating column to loans table");
+      await db.schema.table("loans", (table) => {
+        table.integer("rating").nullable();
+      });
+    }
+
+    if (!hasReviewColumn) {
+      console.log("Adding review column to loans table");
+      await db.schema.table("loans", (table) => {
+        table.text("review").nullable();
+      });
+    }
+
+    return { success: true, message: "Loans table is up to date" };
+  } catch (error) {
+    console.error("Error updating loans table:", error);
+    return { success: false, message: error.message };
+  }
+};
+
+// Function to update book_copies table
+const updateBookCopiesTable = async () => {
+  try {
+    console.log("Checking book_copies table for required fields...");
+
+    // Check if book_copies table exists
+    const hasBookCopies = await db.schema.hasTable("book_copies");
+    if (!hasBookCopies) {
+      console.log(
+        "book_copies table doesn't exist yet - it will be created during initialization"
+      );
+      return {
+        success: true,
+        message: "book_copies table will be created during initialization",
+      };
+    }
+
+    // Check if copy_number column exists
+    const hasCopyNumberColumn = await db.schema.hasColumn(
+      "book_copies",
+      "copy_number"
+    );
+    if (!hasCopyNumberColumn) {
+      console.log("Adding copy_number column to book_copies table");
+
+      await db.schema.table("book_copies", (table) => {
+        table.integer("copy_number").defaultTo(1);
+      });
+
+      console.log("Added copy_number column to book_copies table");
+
+      // Update existing book copies with copy_number based on their sequence for each book
+      const books = await db("books").select("id");
+      for (const book of books) {
+        const bookId = book.id;
+        const copies = await db("book_copies")
+          .where({ book_id: bookId })
+          .orderBy("id", "asc");
+
+        for (let i = 0; i < copies.length; i++) {
+          await db("book_copies")
+            .where({ id: copies[i].id })
+            .update({ copy_number: i + 1 });
+        }
+      }
+
+      console.log("Updated copy_number for all existing book copies");
+    } else {
+      console.log("book_copies table already has copy_number column");
+    }
+
+    return { success: true, message: "book_copies table is up to date" };
+  } catch (error) {
+    console.error("Error updating book_copies table:", error);
+    return { success: false, message: error.message };
+  }
+};
+
+const updateShelvesTable = async () => {
+  try {
+    console.log("Checking shelves table for required fields...");
+
+    // Check if shelves table exists
+    const hasShelves = await db.schema.hasTable("shelves");
+    if (!hasShelves) {
+      console.log(
+        "shelves table doesn't exist yet - it will be created during initialization"
+      );
+      return {
+        success: true,
+        message: "shelves table will be created during initialization",
+      };
+    }
+
+    // Check if section field exists
+    const hasSectionField = await db.schema.hasColumn("shelves", "section");
+    if (!hasSectionField) {
+      console.log("Adding section field to shelves table");
+      await db.schema.table("shelves", (table) => {
+        table.string("section").nullable();
+      });
+      console.log("Added section field to shelves table");
+    } else {
+      console.log("shelves table already has section field");
+    }
+
+    // Check if code field exists
+    const hasCodeField = await db.schema.hasColumn("shelves", "code");
+    if (!hasCodeField) {
+      console.log("Adding code field to shelves table");
+      await db.schema.table("shelves", (table) => {
+        table.string("code").nullable();
+      });
+      console.log("Added code field to shelves table");
+
+      // Update existing shelves with codes based on name or section
+      const shelves = await db("shelves").select("*");
+      for (const shelf of shelves) {
+        const sectionCode = shelf.section
+          ? shelf.section.substring(0, 3).toUpperCase()
+          : shelf.name.substring(0, 3).toUpperCase();
+        const shelfCode = `${sectionCode}-${shelf.id}`;
+
+        await db("shelves").where({ id: shelf.id }).update({ code: shelfCode });
+      }
+      console.log("Updated shelves with generated codes");
+    } else {
+      console.log("shelves table already has code field");
+    }
+
+    return { success: true, message: "shelves table is up to date" };
+  } catch (error) {
+    console.error("Error updating shelves table:", error);
+    return { success: false, message: error.message };
+  }
+};
+
+// Function to clear all loans from the database
+const clearLoans = async () => {
+  try {
+    console.log("Clearing all loans from the database...");
+    const deletedCount = await db("loans").del();
+    console.log(`Cleared ${deletedCount} loans from database`);
+
+    // Reset all book copies that were checked out to Available
+    const updatedCopies = await db("book_copies")
+      .where({ status: "Checked Out" })
+      .update({
+        status: "Available",
+        updated_at: new Date(),
+      });
+
+    console.log(`Reset ${updatedCopies} book copies to Available status`);
+
+    return {
+      success: true,
+      message: `Cleared ${deletedCount} loans and reset ${updatedCopies} book copies`,
+    };
+  } catch (error) {
+    console.error("Error clearing loans:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+const repairDatabase = async () => {
+  return db.transaction(async (trx) => {
+    try {
+      // Get all loans that need book IDs
+      const loansToRepair = await trx("loans")
+        .join("book_copies", "loans.book_copy_id", "book_copies.id")
+        .select("loans.id as loan_id", "book_copies.book_id as book_id");
+
+      // Update each loan to include book details
+      const updatedLoans = [];
+      for (const loan of loansToRepair) {
+        try {
+          // Get book details
+          const book = await trx("books").where({ id: loan.book_id }).first();
+
+          if (book) {
+            // Add book_id and book_title to loan record for faster access
+            await trx("loans").where({ id: loan.loan_id }).update({
+              book_id: book.id,
+              book_title: book.title,
+              book_isbn: book.isbn,
+            });
+
+            updatedLoans.push(loan.loan_id);
+          }
+        } catch (error) {
+          console.error(`Error updating loan ${loan.loan_id}:`, error);
+        }
+      }
+
+      return {
+        success: true,
+        message: `Updated ${updatedLoans.length} loans with book details`,
+        updatedLoans,
+      };
+    } catch (error) {
+      console.error("Error in repairDatabase:", error);
+      throw error;
+    }
+  });
+};
+
 module.exports = {
   db,
   initDatabase,
@@ -1240,6 +2033,20 @@ module.exports = {
   addBook,
   updateBook,
   deleteBook,
+  getAllShelves,
+  getShelfById,
+  addShelf,
+  updateShelf,
+  deleteShelf,
+  getShelfContents,
+  getAllBookCopies,
+  getBookCopyById,
+  getBookCopiesByBookId,
+  addBookCopy,
+  updateBookCopy,
+  deleteBookCopy,
+  moveBookCopy,
+  getBookAvailability,
   getAllMembers,
   getMemberById,
   addMember,
@@ -1266,4 +2073,9 @@ module.exports = {
   updateMembersTable,
   updateBooksTable,
   resetDatabase,
+  updateLoansTable,
+  updateBookCopiesTable,
+  updateShelvesTable,
+  clearLoans,
+  repairDatabase,
 };
