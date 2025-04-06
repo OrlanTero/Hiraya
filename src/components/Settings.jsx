@@ -16,7 +16,9 @@ import {
   Save as SaveIcon,
   Backup as BackupIcon,
   Restore as RestoreIcon,
+  Database as DatabaseIcon,
 } from "@mui/icons-material";
+import DatabaseManager from "./DatabaseManager";
 
 const Settings = () => {
   const [activeTab, setActiveTab] = useState(0);
@@ -250,61 +252,38 @@ const Settings = () => {
               </Grid>
 
               <Grid item xs={12} md={6}>
-                <Paper
-                  elevation={2}
-                  sx={{ p: 3, textAlign: "center", borderRadius: 2 }}
+                <Button
+                  variant="contained"
+                  startIcon={<BackupIcon />}
+                  sx={{
+                    bgcolor: "var(--primary)",
+                    "&:hover": {
+                      bgcolor: "var(--primary-dark)",
+                    },
+                    mr: 2,
+                  }}
                 >
-                  <BackupIcon
-                    sx={{ fontSize: 48, color: "var(--secondary)", mb: 2 }}
-                  />
-                  <Typography variant="h6" gutterBottom>
-                    Backup Database
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" paragraph>
-                    Create a backup of your current database.
-                  </Typography>
-                  <Button
-                    variant="contained"
-                    startIcon={<BackupIcon />}
-                    sx={{
-                      bgcolor: "var(--secondary)",
-                      "&:hover": {
-                        bgcolor: "var(--secondary-dark)",
-                      },
-                    }}
-                  >
-                    Create Backup
-                  </Button>
-                </Paper>
+                  Create Backup
+                </Button>
+                <Button
+                  variant="outlined"
+                  startIcon={<RestoreIcon />}
+                  sx={{
+                    borderColor: "var(--primary)",
+                    color: "var(--primary)",
+                    "&:hover": {
+                      borderColor: "var(--primary-dark)",
+                      color: "var(--primary-dark)",
+                    },
+                  }}
+                >
+                  Restore Backup
+                </Button>
               </Grid>
 
-              <Grid item xs={12} md={6}>
-                <Paper
-                  elevation={2}
-                  sx={{ p: 3, textAlign: "center", borderRadius: 2 }}
-                >
-                  <RestoreIcon
-                    sx={{ fontSize: 48, color: "var(--primary)", mb: 2 }}
-                  />
-                  <Typography variant="h6" gutterBottom>
-                    Restore Database
-                  </Typography>
-                  <Typography variant="body2" color="text.secondary" paragraph>
-                    Restore data from a previous backup.
-                  </Typography>
-                  <Button
-                    variant="contained"
-                    startIcon={<RestoreIcon />}
-                    sx={{
-                      bgcolor: "var(--primary)",
-                      "&:hover": {
-                        bgcolor: "var(--primary-dark)",
-                      },
-                    }}
-                  >
-                    Restore Backup
-                  </Button>
-                </Paper>
+              <Grid item xs={12}>
+                <Divider sx={{ my: 3 }} />
+                <DatabaseManager />
               </Grid>
             </Grid>
           )}

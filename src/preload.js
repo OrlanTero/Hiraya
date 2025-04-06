@@ -84,10 +84,96 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Authentication
   auth: {
-    login: (credentials) => ipcRenderer.invoke("auth:login", credentials),
-    loginWithPin: (pin) => ipcRenderer.invoke("auth:loginWithPin", pin),
-    loginWithQR: (qrData) => ipcRenderer.invoke("auth:loginWithQR", qrData),
-    scanQRCode: () => ipcRenderer.invoke("scan-qr-code"),
+    login: (credentials) => {
+      console.log("Login called with credentials:", {
+        hasEmail: !!credentials.email,
+        hasUsername: !!credentials.username,
+        hasPinOrPassword: !!(credentials.pin || credentials.password),
+        type: typeof credentials,
+      });
+
+      // Handle both formats
+      const formattedCredentials =
+        typeof credentials === "string"
+          ? { pin_code: credentials } // String format (just PIN)
+          : credentials; // Object format
+
+      return ipcRenderer
+        .invoke("auth:login", formattedCredentials)
+        .then((result) => {
+          console.log("IPC login result:", result);
+          return result;
+        })
+        .catch((err) => {
+          console.error("IPC login error:", err);
+          return {
+            success: false,
+            message: `IPC error: ${err.message || "Unknown error"}`,
+          };
+        });
+    },
+    loginWithPin: (pin) => {
+      console.log("LoginWithPin called with:", {
+        pin_type: typeof pin,
+        is_object: typeof pin === "object",
+        value: typeof pin === "object" ? pin.pin_code : pin,
+      });
+
+      // Ensure pin is in the expected format
+      const formattedPin = typeof pin === "object" ? pin : { pin_code: pin };
+
+      return ipcRenderer
+        .invoke("auth:loginWithPin", formattedPin)
+        .then((result) => {
+          console.log("IPC loginWithPin result:", result);
+          return result;
+        })
+        .catch((err) => {
+          console.error("IPC loginWithPin error:", err);
+          return {
+            success: false,
+            message: `IPC error: ${err.message || "Unknown error"}`,
+          };
+        });
+    },
+    loginWithQR: ({ qr_auth_key, pin_code }) => {
+      console.log("LoginWithQR called with:", {
+        has_qr: !!qr_auth_key,
+        has_pin: !!pin_code,
+        qr_type: typeof qr_auth_key,
+        pin_type: typeof pin_code,
+      });
+
+      return ipcRenderer
+        .invoke("auth:loginWithQR", { qr_auth_key, pin_code })
+        .then((result) => {
+          console.log("IPC loginWithQR result:", result);
+          return result;
+        })
+        .catch((err) => {
+          console.error("IPC loginWithQR error:", err);
+          return {
+            success: false,
+            message: `IPC error: ${err.message || "Unknown error"}`,
+          };
+        });
+    },
+    scanQRCode: () => {
+      console.log("scanQRCode called");
+      return ipcRenderer
+        .invoke("scan-qr-code")
+        .then((result) => {
+          console.log("IPC scanQRCode result:", result);
+          return result;
+        })
+        .catch((err) => {
+          console.error("IPC scanQRCode error:", err);
+          return {
+            success: false,
+            message: `IPC error: ${err.message || "Unknown error"}`,
+          };
+        });
+    },
   },
 
   // Database operations
@@ -147,10 +233,99 @@ contextBridge.exposeInMainWorld("electronAPI", {
 contextBridge.exposeInMainWorld("api", {
   // Legacy API for backward compatibility
   // Authentication
-  login: (credentials) => ipcRenderer.invoke("auth:login", credentials),
-  loginWithPin: (pin) => ipcRenderer.invoke("auth:loginWithPin", pin),
-  loginWithQR: (qrData) => ipcRenderer.invoke("auth:loginWithQR", qrData),
-  scanQRCode: () => ipcRenderer.invoke("scan-qr-code"),
+  login: (credentials) => {
+    console.log("Legacy login called with:", credentials);
+    // Convert legacy format to new format if needed
+    const formattedCredentials =
+      typeof credentials === "string"
+        ? { pin_code: credentials }
+        : {
+            // Map various parameter formats consistently
+            email: credentials.email || credentials.username || null,
+            pin:
+              credentials.pin ||
+              credentials.pin_code ||
+              credentials.password ||
+              null,
+          };
+
+    console.log("Formatted credentials for IPC:", formattedCredentials);
+
+    return ipcRenderer
+      .invoke("auth:login", formattedCredentials)
+      .then((result) => {
+        console.log("Legacy IPC login result:", result);
+        return result;
+      })
+      .catch((err) => {
+        console.error("Legacy IPC login error:", err);
+        return {
+          success: false,
+          message: `IPC error: ${err.message || "Unknown error"}`,
+        };
+      });
+  },
+  loginWithPin: (pin) => {
+    console.log("Legacy loginWithPin called with:", {
+      pin_type: typeof pin,
+      value_length: typeof pin === "string" ? pin.length : "N/A",
+    });
+
+    // Ensure consistent format
+    const formattedPin = { pin_code: pin };
+
+    return ipcRenderer
+      .invoke("auth:loginWithPin", formattedPin)
+      .then((result) => {
+        console.log("Legacy IPC loginWithPin result:", result);
+        return result;
+      })
+      .catch((err) => {
+        console.error("Legacy IPC loginWithPin error:", err);
+        return {
+          success: false,
+          message: `IPC error: ${err.message || "Unknown error"}`,
+        };
+      });
+  },
+  loginWithQR: ({ qr_auth_key, pin_code }) => {
+    console.log("Legacy loginWithQR called with:", {
+      has_qr: !!qr_auth_key,
+      has_pin: !!pin_code,
+      qr_value: qr_auth_key,
+      pin_value: pin_code,
+    });
+
+    return ipcRenderer
+      .invoke("auth:loginWithQR", { qr_auth_key, pin_code })
+      .then((result) => {
+        console.log("Legacy IPC loginWithQR result:", result);
+        return result;
+      })
+      .catch((err) => {
+        console.error("Legacy IPC loginWithQR error:", err);
+        return {
+          success: false,
+          message: `IPC error: ${err.message || "Unknown error"}`,
+        };
+      });
+  },
+  scanQRCode: () => {
+    console.log("Legacy scanQRCode called");
+    return ipcRenderer
+      .invoke("scan-qr-code")
+      .then((result) => {
+        console.log("Legacy IPC scanQRCode result:", result);
+        return result;
+      })
+      .catch((err) => {
+        console.error("Legacy IPC scanQRCode error:", err);
+        return {
+          success: false,
+          message: `IPC error: ${err.message || "Unknown error"}`,
+        };
+      });
+  },
 
   // Settings
   getSettings: () => ipcRenderer.invoke("settings:get"),
@@ -172,6 +347,9 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("members:update", { id, member }),
   deleteMember: (id) => ipcRenderer.invoke("members:delete", id),
   updateMembersTable: () => ipcRenderer.invoke("members:updateTable"),
+
+  // Database management
+  resetDatabase: () => ipcRenderer.invoke("database:reset"),
 
   // Loans
   getAllLoans: () => ipcRenderer.invoke("loans:getAll"),

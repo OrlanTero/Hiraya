@@ -160,9 +160,24 @@ export const ServerProvider = ({ children, value }) => {
   // API request function - simplified to avoid path-to-regexp issues
   const apiRequest = async (endpoint, options = {}) => {
     try {
-      // Make sure endpoint is a simple string
-      const cleanEndpoint = endpoint.replace(/^\/+/, "/");
-      console.log(`Making API request to ${API_URL}${cleanEndpoint}`);
+      // Make sure endpoint starts with / and remove any duplicate slashes
+      const cleanEndpoint = endpoint.startsWith("/")
+        ? endpoint
+        : `/${endpoint}`;
+
+      // Build the full URL
+      const fullUrl = `${API_URL}${cleanEndpoint}`;
+      console.log(`Making API request to: ${fullUrl}`);
+
+      // Log request details when debugging
+      if (options.body) {
+        console.log(
+          "Request payload:",
+          typeof options.body === "string"
+            ? JSON.parse(options.body)
+            : options.body
+        );
+      }
 
       const defaultOptions = {
         method: "GET",
@@ -187,18 +202,31 @@ export const ServerProvider = ({ children, value }) => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-      const response = await fetch(`${API_URL}${cleanEndpoint}`, {
+      const response = await fetch(fullUrl, {
         ...finalOptions,
         signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
 
+      // Log response status
+      console.log(`API response status: ${response.status}`);
+
       if (!response.ok) {
-        throw new Error(`API response not OK: ${response.status}`);
+        // Try to read error response
+        let errorData;
+        try {
+          errorData = await response.json();
+          console.error("API error response:", errorData);
+        } catch (e) {
+          console.error("Could not parse error response");
+        }
+
+        throw new Error(`Request failed with status code ${response.status}`);
       }
 
       const data = await response.json();
+      console.log("API response data:", data);
 
       setServerStatus((prev) => ({
         ...prev,

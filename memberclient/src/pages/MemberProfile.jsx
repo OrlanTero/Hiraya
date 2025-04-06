@@ -24,6 +24,15 @@ import {
   Tooltip,
   AppBar,
   Toolbar,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Rating,
+  Snackbar,
+  Alert,
+  alpha,
 } from "@mui/material";
 import {
   Person as PersonIcon,
@@ -37,8 +46,12 @@ import {
   Warning as WarningIcon,
   EventAvailable as EventAvailableIcon,
   QrCode as QrCodeIcon,
+  AssignmentReturn as ReturnIcon,
+  Done as DoneIcon,
+  ThumbUp as ThumbUpIcon,
 } from "@mui/icons-material";
 import { useAuth } from "../contexts/AuthContext";
+import { useServer } from "../contexts/ServerContext";
 
 // TabPanel component for tab content
 function TabPanel(props) {
@@ -61,6 +74,7 @@ const MemberProfile = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { currentUser } = useAuth();
+  const { sendSocketMessage } = useServer();
   const [profile, setProfile] = useState(null);
   const [loans, setLoans] = useState([]);
   const [activeLoans, setActiveLoans] = useState([]);
@@ -68,6 +82,18 @@ const MemberProfile = () => {
   const [loading, setLoading] = useState(true);
   const [tabValue, setTabValue] = useState(0);
   const [qrCodeUrl, setQrCodeUrl] = useState("");
+
+  // State for book return functionality
+  const [returnDialogOpen, setReturnDialogOpen] = useState(false);
+  const [selectedLoan, setSelectedLoan] = useState(null);
+  const [returnLoading, setReturnLoading] = useState(false);
+  const [bookRating, setBookRating] = useState(0);
+  const [bookReview, setBookReview] = useState("");
+  const [snackbar, setSnackbar] = useState({
+    open: false,
+    message: "",
+    severity: "info",
+  });
 
   // Set active tab based on URL params
   useEffect(() => {
@@ -78,38 +104,79 @@ const MemberProfile = () => {
     }
   }, [location]);
 
-  // Fetch member profile and loans
+  // Fetch profile data function wrapped in useCallback for reuse
+  const fetchProfileData = React.useCallback(async () => {
+    if (!currentUser) {
+      navigate("/login");
+      return;
+    }
+
+    try {
+      setLoading(true);
+      console.log("Fetching member profile and loans data...");
+
+      // Get member profile
+      const memberProfile = await window.api.getMemberProfile(currentUser.id);
+      setProfile(memberProfile);
+
+      // Get loans
+      const loanData = await window.api.getLoansByMember(currentUser.id);
+      console.log("Received loans data:", loanData);
+
+      setLoans(loanData);
+
+      // Separate active and past loans
+      setActiveLoans(loanData.filter((loan) => !loan.return_date));
+      setPastLoans(loanData.filter((loan) => loan.return_date));
+
+      // Generate QR code for member
+      generateQRCode(memberProfile);
+    } catch (error) {
+      console.error("Error fetching profile data:", error);
+      setSnackbar({
+        open: true,
+        message: "Failed to load profile data. Please try again later.",
+        severity: "error",
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [currentUser, navigate]);
+
+  // Fetch profile data on component mount
   useEffect(() => {
-    const fetchProfileData = async () => {
-      if (!currentUser) {
-        navigate("/login");
-        return;
-      }
+    fetchProfileData();
+  }, [fetchProfileData]);
 
-      try {
-        // Get member profile
-        const memberProfile = await window.api.getMemberProfile(currentUser.id);
-        setProfile(memberProfile);
+  // Add an event listener to refresh data when the window regains focus
+  useEffect(() => {
+    const handleFocus = () => {
+      console.log("Window focused, refreshing member profile data");
+      fetchProfileData();
+    };
 
-        // Get loans
-        const loanData = await window.api.getLoansByMember(currentUser.id);
-        setLoans(loanData);
+    window.addEventListener("focus", handleFocus);
 
-        // Separate active and past loans
-        setActiveLoans(loanData.filter((loan) => !loan.return_date));
-        setPastLoans(loanData.filter((loan) => loan.return_date));
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [fetchProfileData]);
 
-        // Generate QR code for member
-        generateQRCode(memberProfile);
-      } catch (error) {
-        console.error("Error fetching profile data:", error);
-      } finally {
-        setLoading(false);
+  // Listen to route changes to refresh data
+  useEffect(() => {
+    const handleRouteChange = () => {
+      if (window.location.hash.startsWith("#/profile")) {
+        console.log("Returned to MemberProfile, refreshing data");
+        fetchProfileData();
       }
     };
 
-    fetchProfileData();
-  }, [currentUser, navigate]);
+    window.addEventListener("hashchange", handleRouteChange);
+
+    return () => {
+      window.removeEventListener("hashchange", handleRouteChange);
+    };
+  }, [fetchProfileData]);
 
   const generateQRCode = (profile) => {
     // In a real implementation, this would generate a QR code using a library
@@ -149,6 +216,94 @@ const MemberProfile = () => {
     const today = new Date();
     const dueDate = new Date(loan.due_date);
     return dueDate < today;
+  };
+
+  // Open return dialog
+  const handleOpenReturnDialog = (loan) => {
+    setSelectedLoan(loan);
+    setBookRating(0);
+    setBookReview("");
+    setReturnDialogOpen(true);
+  };
+
+  // Close return dialog
+  const handleCloseReturnDialog = () => {
+    setReturnDialogOpen(false);
+    setSelectedLoan(null);
+  };
+
+  // Handle book return
+  const handleReturnBook = async () => {
+    if (!selectedLoan || !currentUser) return;
+
+    setReturnLoading(true);
+
+    try {
+      console.log(
+        `Attempting to return book: ${selectedLoan.book_id} for user: ${currentUser.id}`
+      );
+
+      const returnData = {
+        loan_id: selectedLoan.id,
+        member_id: currentUser.id,
+        book_id: selectedLoan.book_id,
+        rating: bookRating,
+        review: bookReview,
+        return_date: new Date().toISOString().split("T")[0],
+      };
+
+      const result = await window.api.returnBook(returnData);
+      console.log("Return result:", result);
+
+      if (result.success) {
+        // Update loans state
+        const updatedLoans = loans.map((loan) =>
+          loan.id === selectedLoan.id
+            ? { ...loan, return_date: returnData.return_date }
+            : loan
+        );
+
+        setLoans(updatedLoans);
+
+        // Update active and past loans
+        setActiveLoans(updatedLoans.filter((loan) => !loan.return_date));
+        setPastLoans(updatedLoans.filter((loan) => loan.return_date));
+
+        // Notify server via socket
+        sendSocketMessage &&
+          sendSocketMessage("book_returned", {
+            bookId: selectedLoan.book_id,
+            bookTitle: selectedLoan.book_title,
+            memberId: currentUser.id,
+            memberName: currentUser.name || currentUser.username,
+            rating: bookRating,
+          });
+
+        setSnackbar({
+          open: true,
+          message: `Successfully returned "${selectedLoan.book_title}"`,
+          severity: "success",
+        });
+
+        // Close dialog
+        setReturnDialogOpen(false);
+      } else {
+        throw new Error(result.message || "Failed to return book");
+      }
+    } catch (error) {
+      console.error("Error returning book:", error);
+      setSnackbar({
+        open: true,
+        message: `Failed to return book: ${error.message || "Unknown error"}`,
+        severity: "error",
+      });
+    } finally {
+      setReturnLoading(false);
+    }
+  };
+
+  const handleCloseSnackbar = () => {
+    setSnackbar({ ...snackbar, open: false });
   };
 
   if (loading) {
@@ -211,6 +366,15 @@ const MemberProfile = () => {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Member Profile
           </Typography>
+          {activeLoans.length > 0 && (
+            <Chip
+              icon={<BookIcon />}
+              label={`${activeLoans.length} Active Loans`}
+              color="secondary"
+              variant="outlined"
+              sx={{ color: "white", borderColor: "white" }}
+            />
+          )}
         </Toolbar>
       </AppBar>
 
@@ -249,38 +413,40 @@ const MemberProfile = () => {
                 <Chip
                   label={profile.status}
                   size="small"
-                  color={profile.status === "Active" ? "success" : "default"}
+                  color={profile.status === "Active" ? "success" : "error"}
                 />
               </Typography>
             </Box>
           </Box>
 
-          {/* Tabs navigation */}
-          <Box sx={{ borderBottom: 1, borderColor: "divider" }}>
-            <Tabs
-              value={tabValue}
-              onChange={handleTabChange}
-              aria-label="profile tabs"
-              variant="fullWidth"
-            >
-              <Tab
-                label="Profile Information"
-                id="profile-tab-0"
-                aria-controls="profile-tabpanel-0"
-                icon={<PersonIcon />}
-                iconPosition="start"
-              />
-              <Tab
-                label={`Loan History (${loans.length})`}
-                id="profile-tab-1"
-                aria-controls="profile-tabpanel-1"
-                icon={<BookIcon />}
-                iconPosition="start"
-              />
-            </Tabs>
-          </Box>
+          {/* Tabs */}
+          <Tabs
+            value={tabValue}
+            onChange={handleTabChange}
+            indicatorColor="primary"
+            textColor="primary"
+            centered
+          >
+            <Tab label="Member Information" />
+            <Tab
+              label={
+                <Box sx={{ display: "flex", alignItems: "center" }}>
+                  <span>Loan History</span>
+                  {activeLoans.length > 0 && (
+                    <Chip
+                      label={activeLoans.length}
+                      size="small"
+                      color="primary"
+                      sx={{ ml: 1 }}
+                    />
+                  )}
+                </Box>
+              }
+            />
+            <Tab label="QR Code" />
+          </Tabs>
 
-          {/* Profile information tab */}
+          {/* Member info tab */}
           <TabPanel value={tabValue} index={0}>
             <Grid container spacing={3}>
               <Grid item xs={12} md={6}>
@@ -290,135 +456,106 @@ const MemberProfile = () => {
                       Personal Information
                     </Typography>
                     <Divider sx={{ mb: 2 }} />
-
                     <List>
-                      <ListItem sx={{ py: 1 }}>
+                      <ListItem>
                         <ListItemAvatar>
-                          <Avatar sx={{ bgcolor: "primary.light" }}>
+                          <Avatar>
+                            <PersonIcon />
+                          </Avatar>
+                        </ListItemAvatar>
+                        <ListItemText primary="Name" secondary={profile.name} />
+                      </ListItem>
+                      <ListItem>
+                        <ListItemAvatar>
+                          <Avatar>
                             <EmailIcon />
                           </Avatar>
                         </ListItemAvatar>
                         <ListItemText
                           primary="Email"
-                          secondary={profile.email || "Not provided"}
+                          secondary={profile.email}
                         />
                       </ListItem>
-                      <ListItem sx={{ py: 1 }}>
-                        <ListItemAvatar>
-                          <Avatar sx={{ bgcolor: "primary.light" }}>
-                            <PhoneIcon />
-                          </Avatar>
-                        </ListItemAvatar>
-                        <ListItemText
-                          primary="Phone"
-                          secondary={profile.phone || "Not provided"}
-                        />
-                      </ListItem>
-                      <ListItem sx={{ py: 1 }}>
-                        <ListItemAvatar>
-                          <Avatar sx={{ bgcolor: "primary.light" }}>
-                            <LocationIcon />
-                          </Avatar>
-                        </ListItemAvatar>
-                        <ListItemText
-                          primary="Address"
-                          secondary={profile.address || "Not provided"}
-                        />
-                      </ListItem>
-                      <ListItem sx={{ py: 1 }}>
-                        <ListItemAvatar>
-                          <Avatar sx={{ bgcolor: "primary.light" }}>
-                            <CalendarIcon />
-                          </Avatar>
-                        </ListItemAvatar>
-                        <ListItemText
-                          primary="Date of Birth"
-                          secondary={
-                            profile.date_of_birth
-                              ? formatDate(profile.date_of_birth)
-                              : "Not provided"
-                          }
-                        />
-                      </ListItem>
+                      {profile.phone && (
+                        <ListItem>
+                          <ListItemAvatar>
+                            <Avatar>
+                              <PhoneIcon />
+                            </Avatar>
+                          </ListItemAvatar>
+                          <ListItemText
+                            primary="Phone"
+                            secondary={profile.phone}
+                          />
+                        </ListItem>
+                      )}
+                      {profile.address && (
+                        <ListItem>
+                          <ListItemAvatar>
+                            <Avatar>
+                              <LocationIcon />
+                            </Avatar>
+                          </ListItemAvatar>
+                          <ListItemText
+                            primary="Address"
+                            secondary={profile.address}
+                          />
+                        </ListItem>
+                      )}
                     </List>
                   </CardContent>
                 </Card>
               </Grid>
-
               <Grid item xs={12} md={6}>
                 <Card sx={{ height: "100%" }}>
                   <CardContent>
                     <Typography variant="h6" gutterBottom>
-                      Membership Information
+                      Membership Details
                     </Typography>
                     <Divider sx={{ mb: 2 }} />
-
-                    <Box sx={{ textAlign: "center", mb: 3 }}>
-                      <Typography
-                        variant="subtitle2"
-                        color="text.secondary"
-                        gutterBottom
-                      >
-                        Membership QR Code
-                      </Typography>
-                      <Box
-                        component="img"
-                        src={qrCodeUrl}
-                        alt="Membership QR Code"
-                        sx={{
-                          width: 150,
-                          height: 150,
-                          display: "block",
-                          margin: "0 auto",
-                          border: "1px solid #eee",
-                          borderRadius: 1,
-                        }}
-                      />
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ display: "block", mt: 1 }}
-                      >
-                        Scan this code at the library
-                      </Typography>
-                    </Box>
-
                     <List>
-                      <ListItem sx={{ py: 1 }}>
+                      <ListItem>
                         <ListItemAvatar>
-                          <Avatar sx={{ bgcolor: "secondary.light" }}>
+                          <Avatar>
+                            <CalendarIcon />
+                          </Avatar>
+                        </ListItemAvatar>
+                        <ListItemText
+                          primary="Member Since"
+                          secondary={formatDate(profile.join_date)}
+                        />
+                      </ListItem>
+                      <ListItem>
+                        <ListItemAvatar>
+                          <Avatar>
                             <StarRateIcon />
                           </Avatar>
                         </ListItemAvatar>
                         <ListItemText
                           primary="Membership Type"
-                          secondary={profile.membership_type || "Standard"}
+                          secondary={profile.membership_type}
                         />
                       </ListItem>
-                      <ListItem sx={{ py: 1 }}>
+                      <ListItem>
                         <ListItemAvatar>
-                          <Avatar sx={{ bgcolor: "secondary.light" }}>
+                          <Avatar>
                             <EventAvailableIcon />
                           </Avatar>
                         </ListItemAvatar>
                         <ListItemText
-                          primary="Member Since"
-                          secondary={
-                            profile.created_at
-                              ? formatDate(profile.created_at)
-                              : "Unknown"
-                          }
+                          primary="Membership Expiry"
+                          secondary={formatDate(profile.expiry_date)}
                         />
                       </ListItem>
-                      <ListItem sx={{ py: 1 }}>
+                      <ListItem>
                         <ListItemAvatar>
-                          <Avatar sx={{ bgcolor: "secondary.light" }}>
+                          <Avatar>
                             <BookIcon />
                           </Avatar>
                         </ListItemAvatar>
                         <ListItemText
-                          primary="Active Loans"
-                          secondary={`${activeLoans.length} books currently borrowed`}
+                          primary="Total Books Borrowed"
+                          secondary={loans.length}
                         />
                       </ListItem>
                     </List>
@@ -430,130 +567,346 @@ const MemberProfile = () => {
 
           {/* Loan history tab */}
           <TabPanel value={tabValue} index={1}>
-            {loans.length === 0 ? (
-              <Box sx={{ textAlign: "center", py: 4 }}>
-                <BookIcon
-                  sx={{ fontSize: 60, color: "text.secondary", mb: 2 }}
-                />
-                <Typography variant="h6">No Loan History</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  You haven't borrowed any books yet
-                </Typography>
-                <Button
-                  variant="contained"
-                  color="primary"
-                  sx={{ mt: 2 }}
-                  onClick={() => navigate("/books")}
+            <Box>
+              <Typography variant="h6" gutterBottom>
+                Current Loans{" "}
+                {activeLoans.length > 0 && `(${activeLoans.length})`}
+              </Typography>
+              {activeLoans.length === 0 ? (
+                <Paper
+                  sx={{
+                    p: 3,
+                    textAlign: "center",
+                    bgcolor: "background.default",
+                  }}
                 >
-                  Browse Books
-                </Button>
-              </Box>
-            ) : (
-              <>
-                {activeLoans.length > 0 && (
-                  <Box sx={{ mb: 4 }}>
-                    <Typography variant="h6" gutterBottom>
-                      Current Loans
-                    </Typography>
-                    <List>
-                      {activeLoans.map((loan) => (
+                  <Typography variant="body1" color="text.secondary">
+                    You have no active loans.
+                  </Typography>
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    onClick={() => navigate("/books")}
+                    sx={{ mt: 2 }}
+                  >
+                    Browse Books
+                  </Button>
+                </Paper>
+              ) : (
+                <Grid container spacing={2}>
+                  {activeLoans.map((loan) => {
+                    const isOverdue = isLoanOverdue(loan);
+                    return (
+                      <Grid item xs={12} key={loan.id}>
                         <Paper
-                          key={loan.id}
                           sx={{
-                            mb: 2,
-                            borderLeft: isLoanOverdue(loan)
-                              ? "4px solid #f44336" // red for overdue
-                              : "4px solid #4caf50", // green for current
+                            p: 2,
+                            borderLeft: isOverdue
+                              ? "4px solid #f44336"
+                              : "4px solid #4caf50",
+                            display: "flex",
+                            alignItems: "center",
                           }}
                         >
-                          <ListItem alignItems="flex-start">
-                            <ListItemAvatar>
-                              <Avatar
-                                sx={{ bgcolor: loan.book_color || "#6B4226" }}
-                                variant="rounded"
-                              >
-                                <BookIcon />
-                              </Avatar>
-                            </ListItemAvatar>
-                            <ListItemText
-                              primary={loan.book_title}
-                              secondary={
-                                <React.Fragment>
-                                  <Typography
-                                    component="span"
-                                    variant="body2"
-                                    color="text.primary"
-                                  >
-                                    Borrowed: {formatDate(loan.checkout_date)}
-                                  </Typography>
-                                  {" — "}
-                                  Due: {formatDate(loan.due_date)}
-                                  {isLoanOverdue(loan) && (
-                                    <Chip
-                                      icon={<WarningIcon />}
-                                      label="Overdue"
-                                      size="small"
-                                      color="error"
-                                      sx={{ ml: 1 }}
-                                    />
-                                  )}
-                                </React.Fragment>
-                              }
-                            />
-                          </ListItem>
+                          <Box
+                            sx={{
+                              width: 40,
+                              height: 60,
+                              bgcolor: loan.book_color || "#6B4226",
+                              mr: 2,
+                              display: "flex",
+                              justifyContent: "center",
+                              alignItems: "center",
+                              color: "white",
+                              flexShrink: 0,
+                            }}
+                          >
+                            <BookIcon />
+                          </Box>
+                          <Box sx={{ flexGrow: 1 }}>
+                            <Typography variant="subtitle1">
+                              {loan.book_title}
+                              {isOverdue && (
+                                <Chip
+                                  icon={<WarningIcon />}
+                                  label="Overdue"
+                                  color="error"
+                                  size="small"
+                                  sx={{ ml: 1 }}
+                                />
+                              )}
+                            </Typography>
+                            <Typography
+                              variant="body2"
+                              color="text.secondary"
+                              sx={{ mt: 0.5 }}
+                            >
+                              Borrowed: {formatDate(loan.loan_date)}
+                            </Typography>
+                            <Typography
+                              variant="body2"
+                              color={isOverdue ? "error" : "text.secondary"}
+                              sx={{ fontWeight: isOverdue ? "bold" : "normal" }}
+                            >
+                              Due: {formatDate(loan.due_date)}
+                            </Typography>
+                          </Box>
+                          <Button
+                            variant="contained"
+                            color="primary"
+                            startIcon={<ReturnIcon />}
+                            onClick={() => handleOpenReturnDialog(loan)}
+                            sx={{ ml: 2, flexShrink: 0 }}
+                          >
+                            Return
+                          </Button>
                         </Paper>
-                      ))}
-                    </List>
-                  </Box>
-                )}
+                      </Grid>
+                    );
+                  })}
+                </Grid>
+              )}
 
-                {pastLoans.length > 0 && (
-                  <Box>
-                    <Typography variant="h6" gutterBottom>
-                      Past Loans
-                    </Typography>
-                    <List>
-                      {pastLoans.map((loan) => (
-                        <Paper
-                          key={loan.id}
-                          sx={{ mb: 2, borderLeft: "4px solid #9e9e9e" }} // gray for returned
-                        >
-                          <ListItem alignItems="flex-start">
-                            <ListItemAvatar>
-                              <Avatar
-                                sx={{ bgcolor: loan.book_color || "#6B4226" }}
-                                variant="rounded"
-                              >
-                                <BookIcon />
-                              </Avatar>
-                            </ListItemAvatar>
-                            <ListItemText
-                              primary={loan.book_title}
-                              secondary={
-                                <React.Fragment>
-                                  <Typography
-                                    component="span"
-                                    variant="body2"
-                                    color="text.primary"
-                                  >
-                                    Borrowed: {formatDate(loan.checkout_date)}
-                                  </Typography>
-                                  {" — "}
+              <Typography variant="h6" gutterBottom sx={{ mt: 4 }}>
+                Past Loans {pastLoans.length > 0 && `(${pastLoans.length})`}
+              </Typography>
+              {pastLoans.length === 0 ? (
+                <Paper
+                  sx={{
+                    p: 3,
+                    textAlign: "center",
+                    bgcolor: "background.default",
+                  }}
+                >
+                  <Typography variant="body1" color="text.secondary">
+                    You have no past loans.
+                  </Typography>
+                </Paper>
+              ) : (
+                <Paper sx={{ overflow: "hidden" }}>
+                  <List>
+                    {pastLoans.map((loan, index) => (
+                      <React.Fragment key={loan.id}>
+                        <ListItem>
+                          <ListItemAvatar>
+                            <Avatar
+                              sx={{ bgcolor: loan.book_color || "#6B4226" }}
+                            >
+                              <BookIcon />
+                            </Avatar>
+                          </ListItemAvatar>
+                          <ListItemText
+                            primary={loan.book_title}
+                            secondary={
+                              <React.Fragment>
+                                <Typography
+                                  component="span"
+                                  variant="body2"
+                                  color="text.primary"
+                                >
+                                  Borrowed: {formatDate(loan.loan_date)}
+                                </Typography>
+                                {" — "}
+                                <Typography
+                                  component="span"
+                                  variant="body2"
+                                  color="text.primary"
+                                >
                                   Returned: {formatDate(loan.return_date)}
-                                </React.Fragment>
-                              }
-                            />
-                          </ListItem>
-                        </Paper>
-                      ))}
-                    </List>
-                  </Box>
-                )}
-              </>
-            )}
+                                </Typography>
+                              </React.Fragment>
+                            }
+                          />
+                          {loan.rating && (
+                            <ListItemSecondaryAction>
+                              <Tooltip title={`Your rating: ${loan.rating}/5`}>
+                                <Box
+                                  sx={{ display: "flex", alignItems: "center" }}
+                                >
+                                  <Rating
+                                    value={parseInt(loan.rating)}
+                                    readOnly
+                                    size="small"
+                                  />
+                                </Box>
+                              </Tooltip>
+                            </ListItemSecondaryAction>
+                          )}
+                        </ListItem>
+                        {index < pastLoans.length - 1 && <Divider />}
+                      </React.Fragment>
+                    ))}
+                  </List>
+                </Paper>
+              )}
+            </Box>
+          </TabPanel>
+
+          {/* QR code tab */}
+          <TabPanel value={tabValue} index={2}>
+            <Box
+              sx={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                p: 3,
+              }}
+            >
+              <Typography variant="h6" gutterBottom>
+                Your Membership QR Code
+              </Typography>
+              <Typography
+                variant="body1"
+                color="text.secondary"
+                align="center"
+                sx={{ maxWidth: 500, mb: 3 }}
+              >
+                Show this QR code at the library for quick and easy checkouts.
+                Your member ID and basic information are encoded in this QR
+                code.
+              </Typography>
+              <Paper
+                elevation={4}
+                sx={{
+                  p: 3,
+                  borderRadius: 2,
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                }}
+              >
+                <Box sx={{ mb: 2 }}>
+                  <img
+                    src={qrCodeUrl}
+                    alt="Member QR Code"
+                    style={{ width: 200, height: 200 }}
+                  />
+                </Box>
+                <Typography variant="body2" color="text.secondary">
+                  Member ID: {profile.id}
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {profile.name}
+                </Typography>
+              </Paper>
+            </Box>
           </TabPanel>
         </Paper>
       </Container>
+
+      {/* Return Book Dialog */}
+      <Dialog
+        open={returnDialogOpen}
+        onClose={handleCloseReturnDialog}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle>Return Book</DialogTitle>
+        <DialogContent>
+          {selectedLoan && (
+            <Box sx={{ pt: 1 }}>
+              <Box sx={{ display: "flex", alignItems: "flex-start", mb: 3 }}>
+                <Box
+                  sx={{
+                    width: 50,
+                    height: 75,
+                    bgcolor: selectedLoan.book_color || "#6B4226",
+                    mr: 2,
+                    display: "flex",
+                    justifyContent: "center",
+                    alignItems: "center",
+                    color: "white",
+                    flexShrink: 0,
+                    borderRadius: 1,
+                  }}
+                >
+                  <BookIcon />
+                </Box>
+                <Box>
+                  <Typography variant="h6">
+                    {selectedLoan.book_title}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Borrowed: {formatDate(selectedLoan.loan_date)}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Due: {formatDate(selectedLoan.due_date)}
+                  </Typography>
+                  {isLoanOverdue(selectedLoan) && (
+                    <Typography
+                      variant="body2"
+                      color="error.main"
+                      sx={{ fontWeight: "bold", mt: 1 }}
+                    >
+                      This book is overdue. Late fees may apply.
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+
+              <Divider sx={{ mb: 3 }} />
+
+              <Typography variant="h6" gutterBottom>
+                How was this book?
+              </Typography>
+
+              <Box sx={{ mb: 3 }}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Rate this book (optional)
+                </Typography>
+                <Rating
+                  name="book-rating"
+                  value={bookRating}
+                  onChange={(event, newValue) => {
+                    setBookRating(newValue);
+                  }}
+                  size="large"
+                />
+              </Box>
+
+              <TextField
+                label="Review (optional)"
+                multiline
+                rows={4}
+                fullWidth
+                variant="outlined"
+                value={bookReview}
+                onChange={(e) => setBookReview(e.target.value)}
+                placeholder="Share your thoughts about this book..."
+              />
+            </Box>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseReturnDialog}>Cancel</Button>
+          <Button
+            onClick={handleReturnBook}
+            variant="contained"
+            color="primary"
+            startIcon={<DoneIcon />}
+            disabled={returnLoading}
+          >
+            {returnLoading ? "Processing..." : "Confirm Return"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Snackbar for notifications */}
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert
+          onClose={handleCloseSnackbar}
+          severity={snackbar.severity}
+          variant="filled"
+          sx={{ width: "100%" }}
+        >
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };

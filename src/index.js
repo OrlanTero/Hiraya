@@ -39,6 +39,7 @@ const {
   borrowBooks,
   returnBooks,
   returnBooksViaQRCode,
+  resetDatabase,
 } = require("./database/db");
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -199,8 +200,59 @@ const createWindow = () => {
 
   // Initialize database
   initDatabase()
-    .then(() => {
+    .then(async () => {
       console.log("Database initialized");
+
+      // Ensure members table has all required fields for authentication
+      try {
+        console.log("Updating members table...");
+        await updateMembersTable();
+        console.log("Members table updated successfully");
+      } catch (err) {
+        console.error("Error updating members table:", err);
+      }
+
+      // DEBUG: Print all users in the database
+      try {
+        const users = await getAllUsers();
+        console.log("=== EXISTING USERS IN DATABASE ===");
+        console.log(
+          JSON.stringify(
+            users.map((user) => ({
+              id: user.id,
+              username: user.username,
+              email: user.email,
+              role: user.role,
+              pin_code: user.pin_code,
+              status: user.status,
+            })),
+            null,
+            2
+          )
+        );
+        console.log("=== END USER LIST ===");
+
+        // Also print members for debugging
+        const members = await getAllMembers();
+        console.log("=== EXISTING MEMBERS IN DATABASE ===");
+        console.log(
+          JSON.stringify(
+            members.map((member) => ({
+              id: member.id,
+              name: member.name,
+              email: member.email,
+              pin: member.pin,
+              qr_code: member.qr_code ? "Yes" : "No",
+              status: member.status,
+            })),
+            null,
+            2
+          )
+        );
+        console.log("=== END MEMBERS LIST ===");
+      } catch (err) {
+        console.error("Error fetching users/members:", err);
+      }
 
       // Close splash screen and show main window after database init (and a minimum time)
       setTimeout(() => {
@@ -292,20 +344,137 @@ function setupIpcHandlers() {
   console.log("Setting up IPC handlers");
 
   // Authentication
-  ipcMain.handle("auth:login", async (event, { username, password }) => {
-    console.log("Auth login request received:", { username });
-    return await authenticate(username, password);
+  ipcMain.handle("auth:login", async (event, credentials) => {
+    console.log(
+      "auth:login handler received:",
+      typeof credentials,
+      credentials
+    );
+
+    // Handle various credential formats
+    let userIdentifier = null;
+    let userPin = null;
+
+    try {
+      // Complex object handling with detailed logging
+      if (typeof credentials === "string") {
+        // Simple string format - treat as PIN
+        console.log("Credentials is a string, treating as PIN");
+        userPin = credentials;
+      } else if (typeof credentials === "object") {
+        // Extract fields with comprehensive fallbacks
+        userIdentifier = credentials.email || credentials.username || null;
+        userPin =
+          credentials.pin ||
+          credentials.pin_code ||
+          credentials.password ||
+          null;
+
+        console.log("Extracted credentials:", {
+          has_identifier: !!userIdentifier,
+          identifier_type: userIdentifier ? typeof userIdentifier : "none",
+          has_pin: !!userPin,
+          pin_length: userPin ? userPin.length : 0,
+        });
+      }
+
+      if (!userIdentifier && !userPin) {
+        console.error("No valid credentials provided");
+        return {
+          success: false,
+          message: "No valid credentials provided",
+        };
+      }
+
+      // Authenticate based on available credentials
+      let result;
+      if (userIdentifier) {
+        console.log(`Authenticating with identifier: ${userIdentifier}`);
+        result = await authenticate(userIdentifier, userPin);
+      } else if (userPin) {
+        console.log(`Authenticating with PIN only, length: ${userPin.length}`);
+        result = await authenticateWithPin(userPin);
+      }
+
+      console.log(
+        "Authentication result:",
+        result.success ? "Success" : "Failed",
+        result.message || ""
+      );
+
+      return result;
+    } catch (error) {
+      console.error("Error in auth:login handler:", error);
+      return {
+        success: false,
+        message: `Authentication error: ${error.message}`,
+        error: error.message,
+      };
+    }
   });
 
-  ipcMain.handle("auth:loginWithPin", async (event, { pin_code }) => {
-    console.log("Auth login with PIN request received");
-    return await authenticateWithPin(pin_code);
+  ipcMain.handle("auth:loginWithPin", async (event, pin_data) => {
+    try {
+      console.log(
+        "auth:loginWithPin handler received:",
+        typeof pin_data,
+        pin_data
+      );
+
+      // Handle various pin_data formats:
+      // 1. String: direct PIN code
+      // 2. Object with pin_code: { pin_code: "1234" }
+      // 3. Object with pin: { pin: "1234" }
+      let pin_code;
+
+      if (typeof pin_data === "string") {
+        // Direct PIN string
+        pin_code = pin_data;
+      } else if (typeof pin_data === "object") {
+        // Object format - try different property names
+        pin_code = pin_data.pin_code || pin_data.pin || null;
+      } else {
+        pin_code = null;
+      }
+
+      console.log(
+        "Extracted PIN code for authentication, length:",
+        pin_code ? pin_code.length : 0
+      );
+
+      if (!pin_code) {
+        console.error("No PIN code provided in request");
+        return { success: false, message: "No PIN code provided" };
+      }
+
+      // Call the authentication function
+      const result = await authenticateWithPin(pin_code);
+      console.log(
+        "authenticateWithPin result:",
+        result.success ? "Success" : "Failed"
+      );
+      return result;
+    } catch (error) {
+      console.error(
+        "Error occurred in handler for 'auth:loginWithPin':",
+        error
+      );
+      return {
+        success: false,
+        message: `PIN authentication error: ${error.message}`,
+        error: error.message,
+      };
+    }
   });
 
-  ipcMain.handle("auth:loginWithQR", async (event, { qr_auth_key }) => {
-    console.log("Auth login with QR request received");
-    return await authenticateWithQR(qr_auth_key);
-  });
+  ipcMain.handle(
+    "auth:loginWithQR",
+    async (event, { qr_auth_key, pin_code }) => {
+      console.log("Auth login with QR request received");
+      // Pass both QR auth key and PIN for verification
+      return await authenticateWithQR(qr_auth_key, pin_code);
+    }
+  );
 
   // QR code scanning is now handled in api-server.js
 
@@ -418,6 +587,21 @@ function setupIpcHandlers() {
   // Make sure to update members table with new fields during initialization
   ipcMain.handle("members:updateTable", async () => {
     return await updateMembersTable();
+  });
+
+  // Database management
+  ipcMain.handle("database:reset", async () => {
+    try {
+      console.log("Database reset requested through IPC");
+      const result = await resetDatabase();
+      return result;
+    } catch (error) {
+      console.error("Error in database:reset handler:", error);
+      return {
+        success: false,
+        message: `Reset failed: ${error.message}`,
+      };
+    }
   });
 
   // Loans

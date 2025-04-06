@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld("api", {
   getLoansByMember: (memberId) =>
     ipcRenderer.invoke("loans:getByMember", memberId),
   borrowBooks: (data) => ipcRenderer.invoke("loans:borrow", data),
+  returnBook: (data) => ipcRenderer.invoke("loans:return", data),
 
   // Server connection
   connectToServer: (serverAddress) =>
@@ -50,6 +51,11 @@ contextBridge.exposeInMainWorld("api", {
 
   // Utilities
   scanQRCode: () => ipcRenderer.invoke("utils:scanQRCode"),
+
+  // Diagnostics
+  testEndpoint: (endpoint) =>
+    ipcRenderer.invoke("diagnostics:testEndpoint", endpoint),
+  getServerConfig: () => ipcRenderer.invoke("diagnostics:getServerConfig"),
 });
 
 // Expose Node.js process versions
