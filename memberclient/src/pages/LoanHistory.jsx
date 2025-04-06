@@ -21,6 +21,12 @@ import {
   CardContent,
   Snackbar,
   Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  IconButton,
+  Rating,
+  TextField,
 } from "@mui/material";
 import {
   Book as BookIcon,
@@ -28,6 +34,11 @@ import {
   ArrowBack as ArrowBackIcon,
   AssignmentReturn as ReturnIcon,
   History as HistoryIcon,
+  PersonOutline as PersonIcon,
+  Check as CheckIcon,
+  Info as InfoIcon,
+  Close as CloseIcon,
+  Print as PrintIcon,
 } from "@mui/icons-material";
 import { useAuth } from "../contexts/AuthContext";
 import { useServer } from "../contexts/ServerContext";
@@ -63,6 +74,14 @@ const LoanHistory = () => {
   const [returnDialogOpen, setReturnDialogOpen] = useState(false);
   const [selectedLoan, setSelectedLoan] = useState(null);
   const [returnLoading, setReturnLoading] = useState(false);
+  const [bookRating, setBookRating] = useState(0);
+  const [bookReview, setBookReview] = useState("");
+
+  // Receipt state
+  const [receiptDialogOpen, setReceiptDialogOpen] = useState(false);
+  const [receiptData, setReceiptData] = useState(null);
+  const [returnQRCode, setReturnQRCode] = useState("");
+
   const [snackbar, setSnackbar] = useState({
     open: false,
     message: "",
@@ -274,7 +293,225 @@ const LoanHistory = () => {
   const handleOpenReturnDialog = (loan) => {
     console.log("Opening return dialog for loan:", loan);
     setSelectedLoan(loan);
-    navigate(`/profile?tab=loans&loan_id=${loan.id}`);
+    setReturnDialogOpen(true);
+  };
+
+  const handleReturnBook = async () => {
+    if (!selectedLoan) return;
+
+    try {
+      setReturnLoading(true);
+      console.log("Returning book with loan ID:", selectedLoan.id);
+
+      const result = await window.api.returnBook({
+        loan_id: selectedLoan.id,
+        member_id: currentUser.id,
+        rating: bookRating > 0 ? bookRating : undefined,
+        review: bookReview.trim() || undefined,
+      });
+
+      console.log("Return book result:", result);
+
+      if (result.success) {
+        // Generate return receipt data
+        const returnDate = new Date();
+        const receiptData = {
+          transaction_id: `RET-${Date.now()}`,
+          loan_id: selectedLoan.id,
+          book_title: selectedLoan.book_title,
+          book_id: selectedLoan.book_id,
+          member_name: currentUser.name || currentUser.username,
+          member_id: currentUser.id,
+          borrow_date: selectedLoan.loan_date,
+          return_date: returnDate.toISOString(),
+          rating: bookRating,
+          review: bookReview.trim() || undefined,
+        };
+
+        setReceiptData(receiptData);
+
+        // Generate QR code for the receipt
+        setReturnQRCode(
+          `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=RETURN_${
+            selectedLoan.id
+          }_${returnDate.getTime()}`
+        );
+
+        // Update the loan in the active loans list
+        const updatedLoan = {
+          ...selectedLoan,
+          return_date: returnDate.toISOString(),
+          status: "Returned",
+          rating: bookRating,
+          review: bookReview,
+        };
+
+        setActiveLoans((prevLoans) =>
+          prevLoans.filter((loan) => loan.id !== selectedLoan.id)
+        );
+
+        setPastLoans((prevLoans) => [...prevLoans, updatedLoan]);
+
+        // Update loans by status
+        updateLoansByStatus();
+
+        // Notify server via socket if available
+        if (typeof window.socket !== "undefined" && window.socket) {
+          window.socket.emit("book_return_notification", {
+            member_id: currentUser.id,
+            book_id: selectedLoan.book_id,
+            loan_id: selectedLoan.id,
+          });
+        }
+
+        // Show success message
+        setSnackbar({
+          open: true,
+          message: result.message || "Book returned successfully",
+          severity: "success",
+        });
+
+        // Close return dialog and show receipt
+        setReturnDialogOpen(false);
+        setReceiptDialogOpen(true);
+      } else {
+        // Show error message
+        setSnackbar({
+          open: true,
+          message: result.message || "Failed to return book",
+          severity: "error",
+        });
+      }
+    } catch (error) {
+      console.error("Error returning book:", error);
+      setSnackbar({
+        open: true,
+        message: "Error returning book. Please try again.",
+        severity: "error",
+      });
+    } finally {
+      setReturnLoading(false);
+    }
+  };
+
+  const handleCloseReceiptDialog = () => {
+    setReceiptDialogOpen(false);
+    setReceiptData(null);
+    setReturnQRCode("");
+    setBookRating(0);
+    setBookReview("");
+  };
+
+  const handlePrintReceipt = () => {
+    const receiptWindow = window.open("", "_blank");
+
+    if (receiptWindow) {
+      const html = `
+        <html>
+          <head>
+            <title>Return Receipt</title>
+            <style>
+              body { font-family: Arial, sans-serif; margin: 20px; }
+              .receipt { max-width: 400px; margin: 0 auto; border: 1px solid #ccc; padding: 20px; }
+              .header { text-align: center; border-bottom: 1px solid #eee; padding-bottom: 10px; margin-bottom: 20px; }
+              .qr-code { text-align: center; margin: 20px 0; }
+              .details { margin-bottom: 20px; }
+              .details div { margin-bottom: 5px; }
+              .footer { text-align: center; border-top: 1px solid #eee; padding-top: 10px; font-size: 12px; }
+              .label { font-weight: bold; }
+            </style>
+          </head>
+          <body>
+            <div class="receipt">
+              <div class="header">
+                <h2>Balanghay Library</h2>
+                <h3>Book Return Receipt</h3>
+              </div>
+              
+              <div class="details">
+                <div><span class="label">Transaction ID:</span> ${
+                  receiptData.transaction_id
+                }</div>
+                <div><span class="label">Date:</span> ${new Date(
+                  receiptData.return_date
+                ).toLocaleString()}</div>
+                <div><span class="label">Member:</span> ${
+                  receiptData.member_name
+                } (#${receiptData.member_id})</div>
+                <div><span class="label">Book:</span> ${
+                  receiptData.book_title
+                }</div>
+                <div><span class="label">Borrowed On:</span> ${new Date(
+                  receiptData.borrow_date
+                ).toLocaleDateString()}</div>
+                <div><span class="label">Returned On:</span> ${new Date(
+                  receiptData.return_date
+                ).toLocaleDateString()}</div>
+                ${
+                  receiptData.rating
+                    ? `<div><span class="label">Rating:</span> ${receiptData.rating}/5</div>`
+                    : ""
+                }
+                ${
+                  receiptData.review
+                    ? `<div><span class="label">Review:</span> "${receiptData.review}"</div>`
+                    : ""
+                }
+              </div>
+              
+              <div class="qr-code">
+                <img src="${returnQRCode}" alt="Return QR Code" />
+                <div>Scan to verify return</div>
+              </div>
+              
+              <div class="footer">
+                <p>Thank you for using Balanghay Library!</p>
+                <p>For any questions, please contact us at library@balanghay.org</p>
+              </div>
+            </div>
+            <script>
+              window.onload = function() { window.print(); }
+            </script>
+          </body>
+        </html>
+      `;
+
+      receiptWindow.document.open();
+      receiptWindow.document.write(html);
+      receiptWindow.document.close();
+    } else {
+      setSnackbar({
+        open: true,
+        message: "Popup blocked. Please allow popups to print receipts.",
+        severity: "warning",
+      });
+    }
+  };
+
+  const updateLoansByStatus = () => {
+    const currentDate = new Date();
+
+    // Create active and overdue lists based on current loans
+    const active = [];
+    const overdue = [];
+
+    loans
+      .filter((loan) => !loan.return_date)
+      .forEach((loan) => {
+        const dueDate = new Date(loan.due_date);
+        if (dueDate < currentDate) {
+          overdue.push(loan);
+        } else {
+          active.push(loan);
+        }
+      });
+
+    setActiveLoans(active);
+    setOverdueLoans(overdue);
+
+    // Update past loans
+    const past = loans.filter((loan) => loan.return_date);
+    setPastLoans(past);
   };
 
   // Show loading indicator while fetching data
@@ -592,17 +829,271 @@ const LoanHistory = () => {
         </TabPanel>
       </Paper>
 
+      {/* Return Dialog */}
+      <Dialog
+        open={returnDialogOpen}
+        onClose={() => setReturnDialogOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          Return Book
+          <IconButton
+            aria-label="close"
+            onClick={() => setReturnDialogOpen(false)}
+            sx={{ position: "absolute", right: 8, top: 8 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          {selectedLoan && (
+            <Box sx={{ p: 2 }}>
+              <Typography variant="h6" gutterBottom>
+                {selectedLoan.book_title}
+              </Typography>
+
+              <Box sx={{ display: "flex", alignItems: "center", mb: 2 }}>
+                <Box
+                  sx={{
+                    mr: 2,
+                    width: 80,
+                    height: 120,
+                    overflow: "hidden",
+                    borderRadius: 1,
+                  }}
+                >
+                  <img
+                    src={selectedLoan.cover_image || "/default-book-cover.png"}
+                    alt={selectedLoan.book_title}
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      objectFit: "cover",
+                    }}
+                  />
+                </Box>
+                <Box>
+                  <Typography
+                    variant="body2"
+                    color="text.secondary"
+                    gutterBottom
+                  >
+                    Borrowed on:{" "}
+                    {new Date(selectedLoan.loan_date).toLocaleDateString()}
+                  </Typography>
+                  {selectedLoan.due_date && (
+                    <Typography
+                      variant="body2"
+                      color={
+                        new Date(selectedLoan.due_date) < new Date()
+                          ? "error.main"
+                          : "text.secondary"
+                      }
+                    >
+                      Due on:{" "}
+                      {new Date(selectedLoan.due_date).toLocaleDateString()}
+                    </Typography>
+                  )}
+                </Box>
+              </Box>
+
+              <Typography variant="subtitle1" gutterBottom sx={{ mt: 3 }}>
+                How was the book?
+              </Typography>
+
+              <Box sx={{ mb: 3 }}>
+                <Typography
+                  component="legend"
+                  variant="body2"
+                  color="text.secondary"
+                  gutterBottom
+                >
+                  Rate this book
+                </Typography>
+                <Rating
+                  value={bookRating}
+                  onChange={(event, newValue) => {
+                    setBookRating(newValue);
+                  }}
+                  size="large"
+                />
+              </Box>
+
+              <Box sx={{ mb: 3 }}>
+                <TextField
+                  label="Write a review (optional)"
+                  multiline
+                  rows={3}
+                  value={bookReview}
+                  onChange={(e) => setBookReview(e.target.value)}
+                  fullWidth
+                  variant="outlined"
+                  placeholder="Share your thoughts about this book..."
+                />
+              </Box>
+
+              <Box sx={{ display: "flex", justifyContent: "flex-end", mt: 3 }}>
+                <Button
+                  onClick={() => setReturnDialogOpen(false)}
+                  sx={{ mr: 1 }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={handleReturnBook}
+                  disabled={returnLoading}
+                  startIcon={
+                    returnLoading ? (
+                      <CircularProgress size={20} />
+                    ) : (
+                      <CheckIcon />
+                    )
+                  }
+                >
+                  {returnLoading ? "Processing..." : "Confirm Return"}
+                </Button>
+              </Box>
+            </Box>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Receipt Dialog */}
+      <Dialog
+        open={receiptDialogOpen}
+        onClose={handleCloseReceiptDialog}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle>
+          Book Return Receipt
+          <IconButton
+            aria-label="close"
+            onClick={handleCloseReceiptDialog}
+            sx={{ position: "absolute", right: 8, top: 8 }}
+          >
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          {receiptData && (
+            <Box sx={{ p: 2 }}>
+              <Box sx={{ textAlign: "center", mb: 3 }}>
+                <Typography variant="h5" component="div">
+                  Balanghay Library
+                </Typography>
+                <Typography variant="subtitle1" color="text.secondary">
+                  Book Return Confirmation
+                </Typography>
+              </Box>
+
+              <Paper sx={{ p: 3, mb: 3 }}>
+                <Grid container spacing={2}>
+                  <Grid item xs={6}>
+                    <Typography variant="body2" color="text.secondary">
+                      Transaction ID
+                    </Typography>
+                    <Typography variant="body1">
+                      {receiptData.transaction_id}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="body2" color="text.secondary">
+                      Date
+                    </Typography>
+                    <Typography variant="body1">
+                      {new Date(receiptData.return_date).toLocaleString()}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Divider sx={{ my: 1 }} />
+                  </Grid>
+                  <Grid item xs={12}>
+                    <Typography variant="body2" color="text.secondary">
+                      Book
+                    </Typography>
+                    <Typography variant="h6">
+                      {receiptData.book_title}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="body2" color="text.secondary">
+                      Borrowed On
+                    </Typography>
+                    <Typography variant="body1">
+                      {new Date(receiptData.borrow_date).toLocaleDateString()}
+                    </Typography>
+                  </Grid>
+                  <Grid item xs={6}>
+                    <Typography variant="body2" color="text.secondary">
+                      Returned On
+                    </Typography>
+                    <Typography
+                      variant="body1"
+                      sx={{ color: "success.main", fontWeight: "bold" }}
+                    >
+                      {new Date(receiptData.return_date).toLocaleDateString()}
+                    </Typography>
+                  </Grid>
+                  {receiptData.rating > 0 && (
+                    <Grid item xs={12}>
+                      <Typography variant="body2" color="text.secondary">
+                        Rating
+                      </Typography>
+                      <Rating value={receiptData.rating} readOnly />
+                    </Grid>
+                  )}
+                  {receiptData.review && (
+                    <Grid item xs={12}>
+                      <Typography variant="body2" color="text.secondary">
+                        Review
+                      </Typography>
+                      <Typography variant="body1" sx={{ fontStyle: "italic" }}>
+                        "{receiptData.review}"
+                      </Typography>
+                    </Grid>
+                  )}
+                </Grid>
+              </Paper>
+
+              <Box sx={{ textAlign: "center", mb: 3 }}>
+                <Typography variant="body2" color="text.secondary" gutterBottom>
+                  Scan QR code to verify return
+                </Typography>
+                <Box sx={{ display: "flex", justifyContent: "center" }}>
+                  <img
+                    src={returnQRCode}
+                    alt="Return QR Code"
+                    style={{ width: 150, height: 150 }}
+                  />
+                </Box>
+              </Box>
+
+              <Box sx={{ display: "flex", justifyContent: "center" }}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  startIcon={<PrintIcon />}
+                  onClick={handlePrintReceipt}
+                >
+                  Print Receipt
+                </Button>
+              </Box>
+            </Box>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Snackbar */}
       <Snackbar
         open={snackbar.open}
         autoHideDuration={6000}
         onClose={() => setSnackbar({ ...snackbar, open: false })}
       >
-        <Alert
-          onClose={() => setSnackbar({ ...snackbar, open: false })}
-          severity={snackbar.severity}
-        >
-          {snackbar.message}
-        </Alert>
+        <Alert severity={snackbar.severity}>{snackbar.message}</Alert>
       </Snackbar>
     </Container>
   );

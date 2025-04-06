@@ -536,10 +536,20 @@ function createApiServer(ipcMain, socketServer) {
         throw new Error(`Invalid loan ID format: ${req.body.loan_id}`);
       }
 
-      const { rating, review } = req.body;
+      const { rating, review, member_id } = req.body;
+
+      // Create review data object
+      const reviewData = {};
+      if (rating) reviewData.rating = rating;
+      if (review) reviewData.review = review;
+
+      console.log(
+        `Preparing to return loan ${loanId} with review data:`,
+        reviewData
+      );
 
       // Check if loan exists
-      const loans = await getLoansByMember(req.body.member_id);
+      const loans = await getLoansByMember(member_id);
       const loan = loans.find((l) => l.id === loanId);
 
       if (!loan) {
@@ -556,16 +566,8 @@ function createApiServer(ipcMain, socketServer) {
         });
       }
 
-      // Return the book
-      const result = await returnBook(loanId);
-
-      // If rating is provided, update the loan with rating and review
-      if (rating) {
-        await updateLoan(loanId, {
-          rating: rating,
-          review: review || "",
-        });
-      }
+      // Return the book with rating and review data
+      const result = await returnBook(loanId, reviewData);
 
       // Notify via socket if available
       if (socketServer && loan.book_title) {
@@ -577,6 +579,7 @@ function createApiServer(ipcMain, socketServer) {
           memberName: loan.member_name,
           timestamp: new Date().toISOString(),
           rating: rating,
+          review: review,
         });
       }
 

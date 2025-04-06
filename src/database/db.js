@@ -211,6 +211,8 @@ const initDatabase = async () => {
         table.date("due_date").notNullable();
         table.date("return_date");
         table.string("status").defaultTo("Borrowed");
+        table.integer("rating").nullable();
+        table.text("review").nullable();
         table.timestamp("created_at").defaultTo(db.fn.now());
         table.timestamp("updated_at").defaultTo(db.fn.now());
       });
@@ -236,6 +238,34 @@ const initDatabase = async () => {
           status: "Borrowed",
         },
       ]);
+    } else {
+      // Check if loans table has the necessary columns for ratings and reviews
+      const hasRatingColumn = await db.schema.hasColumn("loans", "rating");
+      const hasReviewColumn = await db.schema.hasColumn("loans", "review");
+
+      if (!hasRatingColumn || !hasReviewColumn) {
+        console.log("Updating loans table with rating and review columns...");
+
+        // Add columns individually instead of using a transaction
+        try {
+          if (!hasRatingColumn) {
+            await db.schema.table("loans", (table) => {
+              table.integer("rating").nullable();
+            });
+            console.log("Added rating column to loans table");
+          }
+
+          if (!hasReviewColumn) {
+            await db.schema.table("loans", (table) => {
+              table.text("review").nullable();
+            });
+            console.log("Added review column to loans table");
+          }
+        } catch (err) {
+          console.error("Error updating loans table:", err);
+          throw err;
+        }
+      }
     }
 
     // Users table for authentication
@@ -512,7 +542,12 @@ const getOverdueLoans = () => {
 const addLoan = (loan) => db("loans").insert(loan).returning("*");
 const updateLoan = (id, loan) =>
   db("loans").where({ id }).update(loan).returning("*");
-const returnBook = (id) => {
+const returnBook = (id, reviewData = {}) => {
+  console.log(
+    `Returning book with loan ID: ${id}`,
+    reviewData ? "With review data" : "No review data"
+  );
+
   return db.transaction(async (trx) => {
     // Get the loan
     const loan = await trx("loans").where({ id }).first();
@@ -522,11 +557,24 @@ const returnBook = (id) => {
     }
 
     // Update loan status and return date
-    await trx("loans").where({ id }).update({
+    const updateData = {
       status: "Returned",
       return_date: new Date(),
       updated_at: new Date(),
-    });
+    };
+
+    // Add rating and review if provided
+    if (reviewData && reviewData.rating) {
+      updateData.rating = reviewData.rating;
+    }
+
+    if (reviewData && reviewData.review) {
+      updateData.review = reviewData.review;
+    }
+
+    console.log(`Updating loan ${id} with data:`, updateData);
+
+    await trx("loans").where({ id }).update(updateData);
 
     // Update book status
     await trx("books").where({ id: loan.book_id }).update({
