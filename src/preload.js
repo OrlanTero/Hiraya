@@ -401,10 +401,26 @@ contextBridge.exposeInMainWorld("api", {
     ipcRenderer.invoke("books:getAvailability", bookId),
   updateBookCopiesTable: () => ipcRenderer.invoke("bookcopies:updateTable"),
 
+  // Dashboard Statistics
+  getDashboardStats: () => ipcRenderer.invoke("dashboard:getStats"),
+  getMostPopularBooks: (limit) =>
+    ipcRenderer.invoke("dashboard:getPopularBooks", limit),
+  getPopularCategories: (limit) =>
+    ipcRenderer.invoke("dashboard:getPopularCategories", limit),
+  getMonthlyCheckouts: () =>
+    ipcRenderer.invoke("dashboard:getMonthlyCheckouts"),
+
   // Socket.io related
   getConnectedClients: () => ipcRenderer.invoke("socket:getClients"),
   broadcastEvent: (eventName, data) =>
     ipcRenderer.invoke("socket:broadcast", { eventName, data }),
+
+  // User Management
+  getAllUsers: () => ipcRenderer.invoke("users:getAll"),
+  getUserById: (id) => ipcRenderer.invoke("users:getById", id),
+  addUser: (user) => ipcRenderer.invoke("users:add", user),
+  updateUser: (id, user) => ipcRenderer.invoke("users:update", { id, user }),
+  deleteUser: (id) => ipcRenderer.invoke("users:delete", id),
 });
 
 // Expose Node.js process versions

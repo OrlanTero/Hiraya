@@ -59,6 +59,10 @@ const {
   updateShelvesTable,
   clearLoans,
   repairDatabase,
+  getDashboardStats,
+  getMostPopularBooks,
+  getPopularCategories,
+  getMonthlyCheckouts,
 } = require("./database/db");
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
@@ -832,6 +836,23 @@ function setupIpcHandlers() {
 
   ipcMain.handle("books:getAvailability", async (event, bookId) => {
     return await getBookAvailability(bookId);
+  });
+
+  // Dashboard Statistics
+  ipcMain.handle("dashboard:getStats", async () => {
+    return await getDashboardStats();
+  });
+
+  ipcMain.handle("dashboard:getPopularBooks", async (event, limit = 5) => {
+    return await getMostPopularBooks(limit);
+  });
+
+  ipcMain.handle("dashboard:getPopularCategories", async (event, limit = 5) => {
+    return await getPopularCategories(limit);
+  });
+
+  ipcMain.handle("dashboard:getMonthlyCheckouts", async () => {
+    return await getMonthlyCheckouts();
   });
 }
 

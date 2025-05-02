@@ -315,7 +315,7 @@ const BookDetails = ({ bookId, onClose, onEdit, onDelete }) => {
             )}
           </Grid>
 
-          <Grid item xs={12}>
+          <Grid item xs={12} md={12}>
             <Divider sx={{ my: 2 }} />
 
             <Tabs
@@ -324,12 +324,19 @@ const BookDetails = ({ bookId, onClose, onEdit, onDelete }) => {
               indicatorColor="primary"
               textColor="primary"
               variant="fullWidth"
+              sx={{
+                borderBottom: 1,
+                borderColor: "divider",
+                "& .MuiTab-root": {
+                  fontWeight: "bold",
+                },
+              }}
             >
               <Tab label="Copies & Availability" icon={<Book />} />
               <Tab label="Loan History" icon={<LibraryBooks />} />
             </Tabs>
 
-            <Box sx={{ mt: 2 }}>
+            <Box sx={{ mt: 2, width: "100%" }}>
               {tabValue === 0 && (
                 <BookCopiesInfo
                   bookId={bookId}
@@ -340,14 +347,14 @@ const BookDetails = ({ bookId, onClose, onEdit, onDelete }) => {
               )}
 
               {tabValue === 1 && (
-                <Box sx={{ p: 2 }}>
+                <Paper elevation={2} sx={{ p: 3, width: "100%" }}>
                   <Typography variant="h6" gutterBottom>
                     Loan History
                   </Typography>
                   <Alert severity="info">
                     Loan history feature coming soon.
                   </Alert>
-                </Box>
+                </Paper>
               )}
             </Box>
           </Grid>

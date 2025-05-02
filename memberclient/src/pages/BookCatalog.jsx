@@ -143,15 +143,15 @@ const BookCatalog = () => {
 
   // Fetch books function wrapped in useCallback for reuse
   const fetchBooks = useCallback(async () => {
-    if (!currentUser) {
-      navigate("/login");
-      return;
-    }
+      if (!currentUser) {
+        navigate("/login");
+        return;
+      }
 
-    try {
-      setLoading(true);
+      try {
+        setLoading(true);
       console.log("Fetching all books from API...");
-      const allBooks = await window.api.getAllBooks();
+        const allBooks = await window.api.getAllBooks();
       console.log("Received books data:", allBooks);
 
       // Add default colors for books without cover images
@@ -164,11 +164,11 @@ const BookCatalog = () => {
       setBooks(booksWithColors);
       setFilteredBooks(booksWithColors);
 
-      // Extract unique categories
-      const uniqueCategories = [
-        ...new Set(allBooks.map((book) => book.category).filter(Boolean)),
-      ];
-      setCategories(uniqueCategories);
+        // Extract unique categories
+        const uniqueCategories = [
+          ...new Set(allBooks.map((book) => book.category).filter(Boolean)),
+        ];
+        setCategories(uniqueCategories);
 
       // Log the current user ID format for debugging
       console.log("Current user ID format:", {
@@ -178,15 +178,15 @@ const BookCatalog = () => {
           parseInt(currentUser.id.toString().replace(/\D/g, ""), 10) ||
           currentUser.id,
       });
-    } catch (error) {
-      console.error("Error fetching books:", error);
+      } catch (error) {
+        console.error("Error fetching books:", error);
       setSnackbar({
         open: true,
         message: "Failed to load books. Please try again later.",
         severity: "error",
       });
-    } finally {
-      setLoading(false);
+      } finally {
+        setLoading(false);
     }
   }, [currentUser, navigate]);
 
@@ -569,14 +569,14 @@ const BookCatalog = () => {
                     <BookStatusChip
                       label={book.status || "Available"}
                       status={book.status || "Available"}
-                      size="small"
-                      icon={
-                        book.status === "Available" ? (
-                          <CheckCircleIcon />
-                        ) : (
-                          <CancelIcon />
-                        )
-                      }
+                        size="small"
+                        icon={
+                          book.status === "Available" ? (
+                            <CheckCircleIcon />
+                          ) : (
+                            <CancelIcon />
+                          )
+                        }
                     />
                     <BookSpine bookcolor={book.color} />
                     <CardActionArea sx={{ height: "100%", pl: "30px" }}>
@@ -586,7 +586,7 @@ const BookCatalog = () => {
                         </BookImage>
                       ) : (
                         <BookImage
-                          sx={{
+                        sx={{
                             bgcolor: alpha(book.color, 0.1),
                           }}
                         >
@@ -612,16 +612,16 @@ const BookCatalog = () => {
                             gap: 0.5,
                           }}
                         >
-                          {book.category && (
-                            <Chip
-                              label={book.category}
-                              size="small"
+                        {book.category && (
+                          <Chip
+                            label={book.category}
+                            size="small"
                               sx={{
                                 bgcolor: alpha(book.color, 0.1),
                                 color: book.color,
                               }}
-                            />
-                          )}
+                          />
+                        )}
                         </Box>
                       </BookContent>
                     </CardActionArea>

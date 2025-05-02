@@ -4,9 +4,6 @@ import logo from "../assets/logo.png";
 const Login = ({ onLogin }) => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [pin, setPin] = useState("");
-  const [showPinLogin, setShowPinLogin] = useState(false);
-  const [showQRLogin, setShowQRLogin] = useState(false);
   const [error, setError] = useState("");
   const [logoLoaded, setLogoLoaded] = useState(false);
 
@@ -49,45 +46,6 @@ const Login = ({ onLogin }) => {
       setError("Error connecting to authentication service");
       return false;
     }
-  };
-
-  const handlePinSubmit = async (e) => {
-    e.preventDefault();
-    console.log("PIN submitted:", pin);
-
-    if (!pin) {
-      setError("Please enter your PIN code");
-      return;
-    }
-
-    try {
-      const result = await window.api.loginWithPin(pin);
-      console.log("PIN login result:", result);
-
-      if (result.success) {
-        onLogin(result.user);
-        return true;
-      } else {
-        setError(result.message || "Invalid PIN code");
-        return false;
-      }
-    } catch (error) {
-      console.error("PIN login error:", error);
-      setError("Error connecting to authentication service");
-      return false;
-    }
-  };
-
-  const togglePinLogin = () => {
-    setShowPinLogin(!showPinLogin);
-    setShowQRLogin(false);
-    setError("");
-  };
-
-  const toggleQRLogin = () => {
-    setShowQRLogin(!showQRLogin);
-    setShowPinLogin(false);
-    setError("");
   };
 
   const containerStyle = {
@@ -174,16 +132,6 @@ const Login = ({ onLogin }) => {
     marginBottom: "16px",
   };
 
-  const linkButtonStyle = {
-    background: "none",
-    border: "none",
-    color: "var(--primary)",
-    textDecoration: "underline",
-    cursor: "pointer",
-    marginTop: "10px",
-    fontSize: "14px",
-  };
-
   const noteStyle = {
     color: "grey",
     fontSize: "12px",
@@ -191,56 +139,15 @@ const Login = ({ onLogin }) => {
     marginTop: "16px",
   };
 
-  const renderLoginMethod = () => {
-    if (showPinLogin) {
-      return (
-        <form onSubmit={handlePinSubmit} style={formStyle}>
-          <div style={inputGroupStyle}>
-            <label style={labelStyle} htmlFor="pin">
-              PIN Code
-            </label>
-            <input
-              id="pin"
-              type="password"
-              style={inputStyle}
-              value={pin}
-              onChange={(e) => setPin(e.target.value)}
-              placeholder="Enter your 6-digit PIN"
-              maxLength={6}
-              required
-            />
-          </div>
+  return (
+    <div style={containerStyle}>
+      <div style={formContainerStyle}>
+        {logoLoaded && <img src={logo} alt="Library Logo" style={logoStyle} />}
+        <h1 style={titleStyle}>Balanghay</h1>
+        <p style={subtitleStyle}>Library Management System</p>
 
-          <button type="submit" style={buttonStyle}>
-            Sign In with PIN
-          </button>
-        </form>
-      );
-    } else if (showQRLogin) {
-      return (
-        <div style={{ textAlign: "center", marginTop: "20px" }}>
-          <p>Scan the QR code to log in</p>
-          <div
-            style={{
-              width: "200px",
-              height: "200px",
-              backgroundColor: "#f5f5f5",
-              margin: "20px auto",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              border: "1px dashed #ddd",
-            }}
-          >
-            <p style={{ color: "#999" }}>QR Scanner Placeholder</p>
-          </div>
-          <p style={{ fontSize: "14px", color: "#666" }}>
-            Position the QR code in front of your camera
-          </p>
-        </div>
-      );
-    } else {
-      return (
+        {error && <div style={errorStyle}>{error}</div>}
+
         <form onSubmit={handleSubmit} style={formStyle}>
           <div style={inputGroupStyle}>
             <label style={labelStyle} htmlFor="username">
@@ -252,6 +159,7 @@ const Login = ({ onLogin }) => {
               style={inputStyle}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter your username"
               required
             />
           </div>
@@ -266,6 +174,7 @@ const Login = ({ onLogin }) => {
               style={inputStyle}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter your password"
               required
             />
           </div>
@@ -273,42 +182,11 @@ const Login = ({ onLogin }) => {
           <button type="submit" style={buttonStyle}>
             Sign In
           </button>
-
-          <p style={noteStyle}>Default login: admin / admin</p>
         </form>
-      );
-    }
-  };
 
-  return (
-    <div style={containerStyle}>
-      <div style={formContainerStyle}>
-        {logoLoaded ? (
-          <img src={logo} alt="Hiraya Balanghay Logo" style={logoStyle} />
-        ) : (
-          <div style={{ ...logoStyle, backgroundColor: "#eee" }}></div>
-        )}
-        <h1 style={titleStyle}>Hiraya Balanghay</h1>
-        <p style={subtitleStyle}>
-          Sign in to access the Library Management System
+        <p style={noteStyle}>
+          Admin access only. Please use your credentials to sign in.
         </p>
-
-        {error && <div style={errorStyle}>{error}</div>}
-
-        {renderLoginMethod()}
-
-        <div style={{ display: "flex", justifyContent: "center", gap: "20px" }}>
-          <button
-            type="button"
-            style={linkButtonStyle}
-            onClick={togglePinLogin}
-          >
-            {showPinLogin ? "Use Password" : "Use PIN Code"}
-          </button>
-          <button type="button" style={linkButtonStyle} onClick={toggleQRLogin}>
-            {showQRLogin ? "Use Password" : "Use QR Code"}
-          </button>
-        </div>
       </div>
     </div>
   );

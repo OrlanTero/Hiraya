@@ -42,6 +42,7 @@ import {
 } from "@mui/icons-material";
 import { useAuth } from "../contexts/AuthContext";
 import { useServer } from "../contexts/ServerContext";
+import MultiBookReturn from "../components/MultiBookReturn";
 
 // TabPanel component for tab content
 function TabPanel(props) {
@@ -87,6 +88,9 @@ const LoanHistory = () => {
     message: "",
     severity: "info",
   });
+
+  // Add state for multi-book return dialog
+  const [multiReturnDialogOpen, setMultiReturnDialogOpen] = useState(false);
 
   // Set active tab based on URL params
   useEffect(() => {
@@ -514,6 +518,36 @@ const LoanHistory = () => {
     setPastLoans(past);
   };
 
+  // Add handler for opening multi-return dialog
+  const handleOpenMultiReturnDialog = () => {
+    console.log('handleOpenMultiReturnDialog called');
+    console.log('Current state before opening dialog:');
+    console.log('- multiReturnDialogOpen:', multiReturnDialogOpen);
+    console.log('- activeLoans count:', activeLoans.length);
+    console.log('- currentUser:', currentUser);
+    
+    // Set the dialog state to open
+    setMultiReturnDialogOpen(true);
+    
+    // Confirm the state was set
+    console.log('Dialog state set to open');
+  };
+  
+  // Add handler for multi-book return success
+  const handleMultiReturnSuccess = (result) => {
+    console.log('Multiple books returned successfully:', result);
+    
+    // Refresh loan data
+    fetchLoanData();
+    
+    // Show success message
+    setSnackbar({
+      open: true,
+      message: `Successfully returned ${result.returns?.length || 0} books`,
+      severity: "success",
+    });
+  };
+
   // Show loading indicator while fetching data
   if (loading) {
     return (
@@ -535,18 +569,66 @@ const LoanHistory = () => {
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      <Box sx={{ mb: 4, display: "flex", alignItems: "center" }}>
-        <Button
-          startIcon={<ArrowBackIcon />}
-          onClick={handleBackToDashboard}
-          sx={{ mr: 2 }}
-        >
-          Back
-        </Button>
-        <Typography variant="h4" component="h1">
-          <HistoryIcon sx={{ mr: 1, verticalAlign: "middle" }} />
-          Loan History
-        </Typography>
+      {/* Debug Section - Only visible in development mode */}
+      {process.env.NODE_ENV === 'development' && (
+        <Paper sx={{ p: 2, mb: 2, bgcolor: 'info.light', color: 'info.contrastText' }}>
+          <Typography variant="h6">Debug Information</Typography>
+          <Typography variant="body2">ActiveLoans: {activeLoans.length}</Typography>
+          <Typography variant="body2">OverdueLoans: {overdueLoans.length}</Typography>
+          <Typography variant="body2">PastLoans: {pastLoans.length}</Typography>
+          <Typography variant="body2">MemberId: {currentUser?.id}</Typography>
+          <Box sx={{ mt: 1 }}>
+            <Button 
+              variant="contained" 
+              color="warning"
+              onClick={() => {
+                console.log('Debug: Forced opening of MultiBookReturn dialog');
+                console.log('Current user:', currentUser);
+                console.log('Active loans:', activeLoans);
+                setMultiReturnDialogOpen(true);
+              }}
+              sx={{ mr: 1 }}
+            >
+              Force Open MultiReturn
+            </Button>
+          </Box>
+        </Paper>
+      )}
+
+      <Box sx={{ mb: 4, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <Box sx={{ display: "flex", alignItems: "center" }}>
+          <Button
+            startIcon={<ArrowBackIcon />}
+            onClick={handleBackToDashboard}
+            sx={{ mr: 2 }}
+          >
+            Back
+          </Button>
+          <Typography variant="h4" component="h1">
+            <HistoryIcon sx={{ mr: 1, verticalAlign: "middle" }} />
+            Loan History
+          </Typography>
+        </Box>
+        
+        {activeLoans.length > 0 ? (
+          <Button
+            variant="contained"
+            color="primary"
+            onClick={() => {
+              console.log('Clicked Return Multiple Books button');
+              console.log('Active loans:', activeLoans);
+              console.log('Current user:', currentUser);
+              handleOpenMultiReturnDialog();
+            }}
+            startIcon={<ReturnIcon />}
+          >
+            Return Multiple Books
+          </Button>
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            No active loans to return
+          </Typography>
+        )}
       </Box>
 
       <Paper sx={{ mb: 4 }}>
@@ -1086,6 +1168,25 @@ const LoanHistory = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Debug info before rendering MultiBookReturn */}
+      {console.log('About to render MultiBookReturn with props:', {
+        open: multiReturnDialogOpen,
+        memberId: currentUser?.id,
+        userHasActiveLoans: activeLoans.length > 0
+      })}
+
+      {/* Add the multi-book return dialog */}
+      <MultiBookReturn
+        open={multiReturnDialogOpen}
+        onClose={() => {
+          console.log('Closing MultiBookReturn dialog');
+          setMultiReturnDialogOpen(false);
+        }}
+        memberId={currentUser?.id}
+        onSuccess={handleMultiReturnSuccess}
+        currentUser={currentUser}
+      />
 
       {/* Snackbar */}
       <Snackbar

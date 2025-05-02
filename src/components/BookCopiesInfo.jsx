@@ -92,15 +92,23 @@ const BookCopiesInfo = ({
   } = availability;
 
   return (
-    <Paper elevation={2} sx={{ p: 2, mt: 2 }}>
+    <Paper elevation={2} sx={{ p: 3, mt: 0, width: "100%" }}>
       <Typography variant="h6" gutterBottom>
         <LibraryBooks sx={{ mr: 1, verticalAlign: "middle" }} />
         Copies Information
       </Typography>
 
-      <Grid container spacing={2} sx={{ mb: 2 }}>
+      <Grid container spacing={2} sx={{ mb: 3 }}>
         <Grid item xs={6} sm={3}>
-          <Box sx={{ textAlign: "center", p: 1 }}>
+          <Box
+            sx={{
+              textAlign: "center",
+              p: 1,
+              bgcolor: "background.paper",
+              borderRadius: 1,
+              boxShadow: 1,
+            }}
+          >
             <Typography variant="h6">{total_copies}</Typography>
             <Typography variant="body2" color="textSecondary">
               Total Copies
@@ -108,7 +116,15 @@ const BookCopiesInfo = ({
           </Box>
         </Grid>
         <Grid item xs={6} sm={3}>
-          <Box sx={{ textAlign: "center", p: 1 }}>
+          <Box
+            sx={{
+              textAlign: "center",
+              p: 1,
+              bgcolor: "background.paper",
+              borderRadius: 1,
+              boxShadow: 1,
+            }}
+          >
             <Typography variant="h6" color="success.main">
               {available_copies}
             </Typography>
@@ -118,7 +134,15 @@ const BookCopiesInfo = ({
           </Box>
         </Grid>
         <Grid item xs={6} sm={3}>
-          <Box sx={{ textAlign: "center", p: 1 }}>
+          <Box
+            sx={{
+              textAlign: "center",
+              p: 1,
+              bgcolor: "background.paper",
+              borderRadius: 1,
+              boxShadow: 1,
+            }}
+          >
             <Typography variant="h6" color="info.main">
               {checked_out_copies}
             </Typography>
@@ -128,7 +152,15 @@ const BookCopiesInfo = ({
           </Box>
         </Grid>
         <Grid item xs={6} sm={3}>
-          <Box sx={{ textAlign: "center", p: 1 }}>
+          <Box
+            sx={{
+              textAlign: "center",
+              p: 1,
+              bgcolor: "background.paper",
+              borderRadius: 1,
+              boxShadow: 1,
+            }}
+          >
             <Typography variant="h6" color="warning.main">
               {damaged_copies}
             </Typography>
@@ -143,18 +175,31 @@ const BookCopiesInfo = ({
 
       {available_copies > 0 ? (
         <>
-          <Typography variant="subtitle1" gutterBottom>
+          <Typography
+            variant="subtitle1"
+            gutterBottom
+            sx={{ fontWeight: "bold", mb: 2 }}
+          >
             Available Copies:
           </Typography>
-          <List>
+          <List
+            sx={{ bgcolor: "background.paper", borderRadius: 1, width: "100%" }}
+          >
             {available_copies_details.map((copy) => (
               <ListItem
                 key={copy.id}
+                sx={{
+                  borderBottom: "1px solid",
+                  borderColor: "divider",
+                  "&:last-child": {
+                    borderBottom: "none",
+                  },
+                }}
                 secondaryAction={
                   <Box sx={{ display: "flex", gap: 1 }}>
                     <Tooltip title="Borrow this copy">
                       <Button
-                        variant="outlined"
+                        variant="contained"
                         size="small"
                         color="primary"
                         onClick={() => onBorrowCopy && onBorrowCopy(copy.id)}
@@ -182,7 +227,11 @@ const BookCopiesInfo = ({
                   <Bookmark />
                 </ListItemIcon>
                 <ListItemText
-                  primary={copy.barcode}
+                  primary={
+                    <Typography variant="subtitle2" sx={{ fontWeight: "bold" }}>
+                      {copy.barcode}
+                    </Typography>
+                  }
                   secondary={
                     <Box>
                       <Typography variant="body2" component="span">

@@ -25,8 +25,11 @@ contextBridge.exposeInMainWorld("api", {
   // Loans
   getLoansByMember: (memberId) =>
     ipcRenderer.invoke("loans:getByMember", memberId),
+  getReturnableBooks: (memberId) => 
+    ipcRenderer.invoke("loans:getReturnableBooks", memberId),
   borrowBooks: (data) => ipcRenderer.invoke("loans:borrow", data),
   returnBook: (data) => ipcRenderer.invoke("loans:return", data),
+  returnMultipleBooks: (data) => ipcRenderer.invoke("loans:returnMultiple", data),
 
   // Server connection
   connectToServer: (serverAddress) =>

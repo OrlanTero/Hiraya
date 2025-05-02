@@ -419,6 +419,7 @@ const initDatabase = async () => {
         table.string("status").defaultTo("Borrowed");
         table.integer("rating").nullable();
         table.text("review").nullable();
+        table.string("transaction_id").nullable(); // Add transaction_id for grouping loans
         table.timestamp("created_at").defaultTo(db.fn.now());
         table.timestamp("updated_at").defaultTo(db.fn.now());
       });
@@ -602,7 +603,7 @@ const initDatabase = async () => {
     await updateShelvesTable();
 
     // Clear all loans on startup
-    await clearLoans();
+    // await clearLoans();
 
     return db;
   } catch (error) {
@@ -689,7 +690,54 @@ const getAllLoans = () =>
       "books.front_cover as book_cover",
       "members.name as member_name",
       "members.email as member_email"
-    );
+    )
+    .orderBy("loans.checkout_date", "desc")
+    .then(async (loans) => {
+      console.log(`DB: Found ${loans.length} loans`);
+      
+      // Group loans by transaction_id if available
+      const groupedLoans = [];
+      const loanGroups = {};
+      
+      for (const loan of loans) {
+        // If no transaction_id or is a single book transaction, handle normally
+        if (!loan.transaction_id) {
+          groupedLoans.push(loan);
+          continue;
+        }
+        
+        // Group loans with the same transaction_id
+        if (!loanGroups[loan.transaction_id]) {
+          loanGroups[loan.transaction_id] = {
+            ...loan,
+            is_batch: true,
+            book_titles: [loan.book_title],
+            book_ids: [loan.book_id],
+            book_copy_ids: [loan.book_copy_id],
+            book_barcodes: [loan.book_barcode],
+            total_books: 1
+          };
+        } else {
+          // Add this book's info to the existing group
+          const group = loanGroups[loan.transaction_id];
+          group.book_titles.push(loan.book_title);
+          group.book_ids.push(loan.book_id);
+          group.book_copy_ids.push(loan.book_copy_id);
+          group.book_barcodes.push(loan.book_barcode);
+          group.total_books += 1;
+          
+          // For multiple books, use a combined title
+          group.book_title = `${group.total_books} books: ${group.book_titles.slice(0, 2).join(", ")}${group.total_books > 2 ? "..." : ""}`;
+        }
+      }
+      
+      // Add all transaction groups to the results
+      for (const transactionId in loanGroups) {
+        groupedLoans.push(loanGroups[transactionId]);
+      }
+      
+      return groupedLoans;
+    });
 
 const getLoansByMember = (memberId) => {
   console.log(
@@ -730,9 +778,51 @@ const getLoansByMember = (memberId) => {
       "members.name as member_name",
       "members.email as member_email"
     )
-    .then((loans) => {
+    .then(async (loans) => {
       console.log(`DB: Found ${loans.length} loans for member ID ${id}`);
-      return loans;
+      
+      // Group loans by transaction_id if available
+      const groupedLoans = [];
+      const loanGroups = {};
+      
+      for (const loan of loans) {
+        // If no transaction_id or is a single book transaction, handle normally
+        if (!loan.transaction_id) {
+          groupedLoans.push(loan);
+          continue;
+        }
+        
+        // Group loans with the same transaction_id
+        if (!loanGroups[loan.transaction_id]) {
+          loanGroups[loan.transaction_id] = {
+            ...loan,
+            is_batch: true,
+            book_titles: [loan.book_title],
+            book_ids: [loan.book_id],
+            book_copy_ids: [loan.book_copy_id],
+            book_barcodes: [loan.book_barcode],
+            total_books: 1
+          };
+        } else {
+          // Add this book's info to the existing group
+          const group = loanGroups[loan.transaction_id];
+          group.book_titles.push(loan.book_title);
+          group.book_ids.push(loan.book_id);
+          group.book_copy_ids.push(loan.book_copy_id);
+          group.book_barcodes.push(loan.book_barcode);
+          group.total_books += 1;
+          
+          // For multiple books, use a combined title
+          group.book_title = `${group.total_books} books: ${group.book_titles.slice(0, 2).join(", ")}${group.total_books > 2 ? "..." : ""}`;
+        }
+      }
+      
+      // Add all transaction groups to the results
+      for (const transactionId in loanGroups) {
+        groupedLoans.push(loanGroups[transactionId]);
+      }
+      
+      return groupedLoans;
     })
     .catch((err) => {
       console.error(`DB: Error fetching loans for member ID ${id}:`, err);
@@ -762,15 +852,64 @@ const getActiveLoans = () =>
       "books.front_cover as book_cover",
       "members.name as member_name",
       "members.email as member_email"
-    );
+    )
+    .then(async (loans) => {
+      console.log(`DB: Found ${loans.length} active loans`);
+      
+      // Group loans by transaction_id if available
+      const groupedLoans = [];
+      const loanGroups = {};
+      
+      for (const loan of loans) {
+        // If no transaction_id or is a single book transaction, handle normally
+        if (!loan.transaction_id) {
+          groupedLoans.push(loan);
+          continue;
+        }
+        
+        // Group loans with the same transaction_id
+        if (!loanGroups[loan.transaction_id]) {
+          loanGroups[loan.transaction_id] = {
+            ...loan,
+            is_batch: true,
+            book_titles: [loan.book_title],
+            book_ids: [loan.book_id],
+            book_copy_ids: [loan.book_copy_id],
+            book_barcodes: [loan.book_barcode],
+            total_books: 1
+          };
+        } else {
+          // Add this book's info to the existing group
+          const group = loanGroups[loan.transaction_id];
+          group.book_titles.push(loan.book_title);
+          group.book_ids.push(loan.book_id);
+          group.book_copy_ids.push(loan.book_copy_id);
+          group.book_barcodes.push(loan.book_barcode);
+          group.total_books += 1;
+          
+          // For multiple books, use a combined title
+          group.book_title = `${group.total_books} books: ${group.book_titles.slice(0, 2).join(", ")}${group.total_books > 2 ? "..." : ""}`;
+        }
+      }
+      
+      // Add all transaction groups to the results
+      for (const transactionId in loanGroups) {
+        groupedLoans.push(loanGroups[transactionId]);
+      }
+      
+      return groupedLoans;
+    });
 
 const getOverdueLoans = () => {
-  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD format
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Set to start of today
+
   return db("loans")
     .join("book_copies", "loans.book_copy_id", "book_copies.id")
     .join("books", "book_copies.book_id", "books.id")
     .join("members", "loans.member_id", "members.id")
     .whereNull("loans.return_date")
+    .andWhere("loans.status", "!=", "Returned")
     .andWhere("loans.due_date", "<", today)
     .select(
       "loans.*",
@@ -787,7 +926,53 @@ const getOverdueLoans = () => {
       "books.front_cover as book_cover",
       "members.name as member_name",
       "members.email as member_email"
-    );
+    )
+    .then(async (loans) => {
+      console.log(`DB: Found ${loans.length} overdue loans`);
+      
+      // Group loans by transaction_id if available
+      const groupedLoans = [];
+      const loanGroups = {};
+      
+      for (const loan of loans) {
+        // If no transaction_id or is a single book transaction, handle normally
+        if (!loan.transaction_id) {
+          groupedLoans.push(loan);
+          continue;
+        }
+        
+        // Group loans with the same transaction_id
+        if (!loanGroups[loan.transaction_id]) {
+          loanGroups[loan.transaction_id] = {
+            ...loan,
+            is_batch: true,
+            book_titles: [loan.book_title],
+            book_ids: [loan.book_id],
+            book_copy_ids: [loan.book_copy_id],
+            book_barcodes: [loan.book_barcode],
+            total_books: 1
+          };
+        } else {
+          // Add this book's info to the existing group
+          const group = loanGroups[loan.transaction_id];
+          group.book_titles.push(loan.book_title);
+          group.book_ids.push(loan.book_id);
+          group.book_copy_ids.push(loan.book_copy_id);
+          group.book_barcodes.push(loan.book_barcode);
+          group.total_books += 1;
+          
+          // For multiple books, use a combined title
+          group.book_title = `${group.total_books} books: ${group.book_titles.slice(0, 2).join(", ")}${group.total_books > 2 ? "..." : ""}`;
+        }
+      }
+      
+      // Add all transaction groups to the results
+      for (const transactionId in loanGroups) {
+        groupedLoans.push(loanGroups[transactionId]);
+      }
+      
+      return groupedLoans;
+    });
 };
 
 const addLoan = (loan) => db("loans").insert(loan).returning("*");
@@ -897,6 +1082,9 @@ const borrowBooks = (memberData) => {
       bookCopiesDetails.map((b) => `${b.title} (${b.barcode})`).join(", ")
     );
 
+    // Generate a transaction ID for this group of books
+    const transactionId = `LOAN-${Date.now()}-${member_id}`;
+
     // Create loans for each book copy
     const loans = bookCopiesArray.map((bookCopyId) => ({
       book_copy_id: bookCopyId,
@@ -904,6 +1092,7 @@ const borrowBooks = (memberData) => {
       checkout_date: checkout_date || new Date(),
       due_date: due_date || new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // Default to 14 days
       status: "Borrowed",
+      transaction_id: transactionId  // Add the transaction ID to group these loans
     }));
 
     // Insert all loans
@@ -930,7 +1119,44 @@ const returnBooks = (loanIds) => {
       throw new Error("Some loan IDs are invalid");
     }
 
-    // Update all loans to returned
+    // Check if the first loan has a transaction_id and is part of a batch
+    const firstLoan = loans[0];
+    if (firstLoan.transaction_id) {
+      console.log(`Loan ${firstLoan.id} is part of transaction ${firstLoan.transaction_id}`);
+      
+      // Get all loans in this transaction to return them all at once
+      const batchLoans = await trx("loans")
+        .where("transaction_id", firstLoan.transaction_id)
+        .whereNull("return_date")
+        .select("*");
+        
+      if (batchLoans.length > 0) {
+        console.log(`Found ${batchLoans.length} loans in transaction ${firstLoan.transaction_id}`);
+        
+        // Update all loans in the batch to returned
+        const batchLoanIds = batchLoans.map(loan => loan.id);
+        await trx("loans").whereIn("id", batchLoanIds).update({
+          status: "Returned",
+          return_date: today,
+          updated_at: today,
+        });
+        
+        // Update all books to available
+        const bookCopiesIds = batchLoans.map((loan) => loan.book_copy_id);
+        await trx("book_copies").whereIn("id", bookCopiesIds).update({
+          status: "Available",
+          updated_at: today,
+        });
+        
+        return { 
+          success: true, 
+          count: batchLoans.length,
+          message: `Returned ${batchLoans.length} books in batch` 
+        };
+      }
+    }
+
+    // Regular case - update the specified loans
     await trx("loans").whereIn("id", loanIds).update({
       status: "Returned",
       return_date: today,
@@ -1832,7 +2058,50 @@ const updateLoansTable = async () => {
       });
     }
 
-    return { success: true, message: "Loans table is up to date" };
+    // Check for transaction_id column
+    const hasTransactionIdColumn = await db.schema.hasColumn("loans", "transaction_id");
+    
+    if (!hasTransactionIdColumn) {
+      console.log("Adding transaction_id column to loans table");
+      await db.schema.table("loans", (table) => {
+        table.string("transaction_id").nullable();
+      });
+      console.log("Added transaction_id column to loans table");
+      
+      // Generate transaction IDs for existing loans that were borrowed at the same time
+      const loans = await db("loans").select("*").orderBy("checkout_date");
+      
+      // Group loans by member_id and checkout_date (approximately same time)
+      const loanGroups = {};
+      
+      for (const loan of loans) {
+        const key = `${loan.member_id}-${loan.checkout_date}`;
+        if (!loanGroups[key]) {
+          loanGroups[key] = [];
+        }
+        loanGroups[key].push(loan);
+      }
+      
+      // Assign transaction IDs to each group
+      for (const key in loanGroups) {
+        const group = loanGroups[key];
+        if (group.length > 1) {
+          // These loans were likely borrowed together
+          const transactionId = `LOAN-${Date.now()}-${group[0].member_id}`;
+          
+          for (const loan of group) {
+            await db("loans").where({ id: loan.id }).update({
+              transaction_id: transactionId,
+              updated_at: new Date()
+            });
+          }
+          
+          console.log(`Assigned transaction ID ${transactionId} to ${group.length} loans`);
+        }
+      }
+    }
+
+    return { success: true, message: "Loans table is up-to-date" };
   } catch (error) {
     console.error("Error updating loans table:", error);
     return { success: false, message: error.message };
@@ -2025,6 +2294,153 @@ const repairDatabase = async () => {
   });
 };
 
+/**
+ * Get dashboard statistics including total books, members, checked out books, and overdue returns
+ * @returns {Promise<Object>} Object containing dashboard statistics
+ */
+const getDashboardStats = async () => {
+  try {
+    // Get total books count
+    const [{ count: totalBooks }] = await db("books").count("* as count");
+
+    // Get active members count
+    const [{ count: activeMembers }] = await db("members")
+      .where({ status: "Active" })
+      .count("* as count");
+
+    // Get checked out books count
+    const [{ count: booksCheckedOut }] = await db("book_copies")
+      .where({ status: "Checked Out" })
+      .count("* as count");
+
+    // Get overdue books count
+    const today = new Date();
+    const overdueLoans = await db("loans")
+      .where({ status: "Active" })
+      .where("due_date", "<", today)
+      .count("* as count");
+
+    const pendingReturns = overdueLoans[0].count;
+
+    return {
+      success: true,
+      data: {
+        totalBooks,
+        activeMembers,
+        booksCheckedOut,
+        pendingReturns,
+      },
+    };
+  } catch (error) {
+    console.error("Error getting dashboard stats:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Get most popular books based on checkout frequency
+ * @param {number} limit Number of books to return
+ * @returns {Promise<Object>} Object containing popular books data
+ */
+const getMostPopularBooks = async (limit = 5) => {
+  try {
+    const popularBooks = await db("loans")
+      .join("books", "loans.book_id", "books.id")
+      .select("books.id", "books.title", "books.author")
+      .count("loans.id as borrow_count")
+      .groupBy("books.id", "books.title", "books.author")
+      .orderBy("borrow_count", "desc")
+      .limit(limit);
+
+    return {
+      success: true,
+      data: popularBooks,
+    };
+  } catch (error) {
+    console.error("Error getting popular books:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Get popular book categories based on total checkouts
+ * @param {number} limit Number of categories to return
+ * @returns {Promise<Object>} Object containing popular categories data
+ */
+const getPopularCategories = async (limit = 5) => {
+  try {
+    const popularCategories = await db("loans")
+      .join("books", "loans.book_id", "books.id")
+      .select("books.category")
+      .count("loans.id as count")
+      .whereNotNull("books.category")
+      .groupBy("books.category")
+      .orderBy("count", "desc")
+      .limit(limit);
+
+    return {
+      success: true,
+      data: popularCategories.map((category) => ({
+        category: category.category || "Uncategorized",
+        count: parseInt(category.count),
+      })),
+    };
+  } catch (error) {
+    console.error("Error getting popular categories:", error);
+    return { success: false, error: error.message };
+  }
+};
+
+/**
+ * Get monthly checkout statistics for the current year
+ * @returns {Promise<Object>} Object containing monthly checkout data
+ */
+const getMonthlyCheckouts = async () => {
+  try {
+    const currentYear = new Date().getFullYear();
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+
+    // Get checkout counts by month for current year
+    const results = await db("loans")
+      .select(db.raw("MONTH(checkout_date) as month"))
+      .count("* as count")
+      .whereRaw(`YEAR(checkout_date) = ?`, [currentYear])
+      .groupByRaw("MONTH(checkout_date)")
+      .orderByRaw("MONTH(checkout_date)");
+
+    // Convert to the format needed for charts
+    const monthlyData = months.map((monthName, index) => {
+      const monthNumber = index + 1;
+      const monthData = results.find((r) => parseInt(r.month) === monthNumber);
+      return {
+        month: monthName,
+        count: monthData ? parseInt(monthData.count) : 0,
+      };
+    });
+
+    return {
+      success: true,
+      data: monthlyData,
+    };
+  } catch (error) {
+    console.error("Error getting monthly checkouts:", error);
+    return { success: false, error: error.message };
+  }
+};
+
 module.exports = {
   db,
   initDatabase,
@@ -2078,4 +2494,8 @@ module.exports = {
   updateShelvesTable,
   clearLoans,
   repairDatabase,
+  getDashboardStats,
+  getMostPopularBooks,
+  getPopularCategories,
+  getMonthlyCheckouts,
 };

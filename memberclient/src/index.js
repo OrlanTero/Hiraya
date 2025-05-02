@@ -424,6 +424,98 @@ const setupIpcHandlers = () => {
     }
   });
 
+  // New handler for getting returnable books
+  ipcMain.handle("loans:getReturnableBooks", async (event, memberId) => {
+    try {
+      console.log(`Fetching returnable books for member ${memberId}...`);
+      
+      // Ensure memberId is properly formatted
+      let formattedId = memberId;
+      if (typeof memberId === "string") {
+        const parsed = parseInt(memberId, 10);
+        if (!isNaN(parsed)) {
+          formattedId = parsed;
+          console.log(`Converted string ID '${memberId}' to numeric ID: ${formattedId}`);
+        }
+      }
+      
+      const response = await serverAPI.get(`/api/loans/member/${formattedId}/returnable`);
+      console.log("Returnable books response:", {
+        hasData: !!response.data,
+        dataType: typeof response.data,
+        keys: response.data ? Object.keys(response.data) : [],
+      });
+      
+      // Extract return books from the response
+      let returnableBooks = [];
+      if (response.data && response.data.returnableBooks) {
+        returnableBooks = response.data.returnableBooks;
+      } else if (Array.isArray(response.data)) {
+        returnableBooks = response.data;
+      }
+      
+      console.log(`Found ${returnableBooks.length} returnable books for member`);
+      return returnableBooks;
+    } catch (error) {
+      console.error(`Error fetching returnable books for member ${memberId}:`, error);
+      return [];
+    }
+  });
+  
+  // New handler for returning multiple books
+  ipcMain.handle("loans:returnMultiple", async (event, data) => {
+    try {
+      console.log("Received request to return multiple books:", JSON.stringify(data));
+      
+      // Validate the data structure
+      if (!data.returns || !Array.isArray(data.returns) || data.returns.length === 0) {
+        console.error("Invalid data format for multiple book return:", data);
+        return {
+          success: false,
+          message: "Invalid data format for multiple book return"
+        };
+      }
+      
+      // Format the data according to the API requirements
+      const formattedData = {
+        returns: data.returns.map(item => {
+          if (!item.loan_id) {
+            console.error("Missing loan_id in return item:", item);
+          }
+          
+          return {
+            loanId: item.loan_id,
+            returnCondition: item.returnCondition || 'Good',
+            note: item.note || ''
+          };
+        })
+      };
+      
+      console.log("Formatted return data for API:", JSON.stringify(formattedData));
+      
+      // Make the API call
+      const response = await serverAPI.post("/api/loans/return", formattedData);
+      console.log("API response for multiple book return:", response.data);
+      
+      return response.data;
+    } catch (error) {
+      console.error("Error returning multiple books:", error);
+      console.error("Error details:", {
+        message: error.message,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        url: error.config?.url,
+        method: error.config?.method,
+      });
+      
+      return {
+        success: false,
+        message: error.response?.data?.message || error.message,
+      };
+    }
+  });
+
   // Server connection
   ipcMain.handle("server:connect", async (event, serverAddress) => {
     try {

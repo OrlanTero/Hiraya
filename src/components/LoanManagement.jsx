@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Typography,
   Paper,
@@ -69,6 +69,8 @@ import {
 } from "@mui/icons-material";
 import QRCode from "qrcode";
 import jsQR from "jsqr";
+// Import MultiBookReturn component for multiple book returns
+import MultiBookReturn from "./MultiBookReturn";
 
 const LoanManagement = () => {
   const receiptRef = useRef(null);
@@ -91,6 +93,10 @@ const LoanManagement = () => {
     message: "",
     severity: "success",
   });
+  
+  // State for multiple book return dialog
+  const [multiReturnDialogOpen, setMultiReturnDialogOpen] = useState(false);
+  const [selectedMemberForReturn, setSelectedMemberForReturn] = useState(null);
 
   // State for new borrow dialog
   const [selectedMember, setSelectedMember] = useState(null);
@@ -106,8 +112,32 @@ const LoanManagement = () => {
     })()
   );
 
-  // State for return dialog
+  // Update the state type for selected loans to include condition and notes
   const [selectedLoans, setSelectedLoans] = useState([]);
+
+  // Add handler function to update loan condition
+  const handleLoanConditionChange = (loanId, condition) => {
+    setSelectedLoans(prevLoans => {
+      return prevLoans.map(loan => {
+        if (loan.id === loanId) {
+          return { ...loan, returnCondition: condition };
+        }
+        return loan;
+      });
+    });
+  };
+
+  // Add handler function to update loan notes
+  const handleLoanNoteChange = (loanId, note) => {
+    setSelectedLoans(prevLoans => {
+      return prevLoans.map(loan => {
+        if (loan.id === loanId) {
+          return { ...loan, note: note };
+        }
+        return loan;
+      });
+    });
+  };
 
   const [openQRScannerDialog, setOpenQRScannerDialog] = useState(false);
   const [qrScannerActive, setQRScannerActive] = useState(false);
@@ -143,6 +173,8 @@ const LoanManagement = () => {
   // Add state for QR popup
   const [qrPopoverAnchor, setQrPopoverAnchor] = useState(null);
   const [currentLoanQR, setCurrentLoanQR] = useState(null);
+
+  const [hasSchemaIssue, setHasSchemaIssue] = useState(false);
 
   const handleManualQRSubmit = () => {
     if (manualQRInput.trim() === "") {
@@ -276,34 +308,30 @@ const LoanManagement = () => {
   const [showDebugImage, setShowDebugImage] = useState(false);
 
   useEffect(() => {
-    const fetchInitialData = async () => {
+    const loadData = async () => {
       try {
-        // Fetch all active loans
-        const loansData = await window.api.getActiveLoans();
-        setLoans(loansData);
-
-        // Fetch all members
+        // Load members
         const membersData = await window.api.getAllMembers();
         setMembers(membersData);
 
-        // Fetch all books
+        // Load books
         const booksData = await window.api.getAllBooks();
         setBooks(booksData);
 
-        setLoading(false);
+        // Load initial loans
+        await fetchLoansByTab(activeTab);
       } catch (error) {
-        console.error("Error fetching data:", error);
+        console.error("Error loading initial data:", error);
         setSnackbar({
           open: true,
-          message: "Failed to load data",
+          message: "Error loading initial data: " + error.message,
           severity: "error",
         });
-        setLoading(false);
       }
     };
 
-    fetchInitialData();
-  }, []);
+    loadData();
+  }, [fetchLoansByTab, activeTab]); // Add fetchLoansByTab to the dependency array
 
   // Add logging to inspect loan data when it updates
   useEffect(() => {
@@ -326,7 +354,7 @@ const LoanManagement = () => {
   }
 
   // Handle borrowing a specific book copy
-  const handleDirectCopyBorrow = async (copyId) => {
+  async function handleDirectCopyBorrow(copyId) {
     try {
       // 1. First get the book copy details
       const bookCopy = await window.api.getBookCopyById(copyId);
@@ -362,46 +390,65 @@ const LoanManagement = () => {
         severity: "error",
       });
     }
-  };
+  }
 
   const handleTabChange = (event, newValue) => {
     setActiveTab(newValue);
     fetchLoansByTab(newValue);
   };
 
-  const fetchLoansByTab = async (tabIndex) => {
+  // Function to fetch loans for the current tab
+  const fetchLoansByTab = useCallback(async (tabValue) => {
     setLoading(true);
     try {
       let loansData;
-      switch (tabIndex) {
-        case 0: // All active loans
-          loansData = await window.api.getActiveLoans();
-          break;
-        case 1: // Overdue loans
-          loansData = await window.api.getOverdueLoans();
-          break;
-        default:
-          loansData = await window.api.getAllLoans();
+
+      if (tabValue === 0) {
+        // All active loans
+        const result = await window.api.getActiveLoans();
+        loansData = result;
+      } else if (tabValue === 1) {
+        // Overdue loans
+        const result = await window.api.getOverdueLoans();
+        loansData = result;
+      } else {
+        // All loans (including returned)
+        const result = await window.api.getAllLoans();
+        loansData = result;
       }
 
-      // Check and fix any missing book_id fields in the loans
-      const fixedLoansData = await ensureCompleteLoansData(loansData);
+      // Check if the loans data has the expected structure
+      // This helps identify schema issues
+      if (loansData.length > 0) {
+        const hasNecessaryFields = loansData.every(
+          (loan) => loan.book_copy_id || loan.book_id
+        );
+        setHasSchemaIssue(!hasNecessaryFields);
+      } else {
+        // If there are no loans, we'll check the database schema directly
+        try {
+          const schemaCheck = await window.api.updateLoansTable();
+          setHasSchemaIssue(!schemaCheck.success);
+        } catch (error) {
+          console.error("Error checking schema:", error);
+          setHasSchemaIssue(true);
+        }
+      }
 
-      setLoans(fixedLoansData);
+      setLoans(loansData);
     } catch (error) {
       console.error("Error fetching loans:", error);
       setSnackbar({
         open: true,
-        message:
-          "Failed to load loans. The database schema might need to be updated.",
+        message: "Error fetching loans: " + error.message,
         severity: "error",
       });
-      // Set empty array to prevent further errors
       setLoans([]);
+      setHasSchemaIssue(true);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   // Function to ensure loan data has all needed fields
   const ensureCompleteLoansData = async (loansData) => {
@@ -489,6 +536,51 @@ const LoanManagement = () => {
 
   const handleCloseReturnDialog = () => {
     setOpenReturnDialog(false);
+  };
+
+  // Handler for opening the multi-book return dialog
+  const handleOpenMultiReturnDialog = () => {
+    console.log('Opening multi-book return dialog');
+    
+    // First, prompt user to select a member
+    if (!selectedMemberForReturn) {
+      // Open the member select dialog first
+      setOpenMemberSelectDialog(true);
+      // Once a member is selected in handleMemberSelect, we'll set selectedMemberForReturn
+      // and then we can continue to open the multi-return dialog
+    } else {
+      // We already have a selected member, open the dialog directly
+      setMultiReturnDialogOpen(true);
+    }
+  };
+
+  // Handler for closing the multi-book return dialog
+  const handleCloseMultiReturnDialog = () => {
+    console.log('Closing multi-book return dialog');
+    setMultiReturnDialogOpen(false);
+    // Reset the selected member
+    setSelectedMemberForReturn(null);
+  };
+
+  // Handler for successful multiple book return
+  const handleMultiReturnSuccess = (result) => {
+    console.log('Multiple books returned successfully:', result);
+    
+    // Show success snackbar
+    setSnackbar({
+      open: true,
+      message: `Successfully returned ${result.returns?.length || 0} books`,
+      severity: "success",
+    });
+    
+    // Refresh loan data
+    fetchLoansByTab(activeTab);
+  };
+
+  // Handler for member selection for multi-book return
+  const handleSelectMemberForReturn = (member) => {
+    console.log('Selected member for return:', member);
+    setSelectedMemberForReturn(member);
   };
 
   // Function to handle opening copy selection dialog
@@ -789,14 +881,32 @@ const LoanManagement = () => {
     }
 
     try {
-      await window.api.returnBooks(selectedLoans.map((loan) => loan.id));
-      setSnackbar({
-        open: true,
-        message: `Successfully returned ${selectedLoans.length} book(s)`,
-        severity: "success",
-      });
-      fetchLoansByTab(activeTab);
-      setOpenReturnDialog(false);
+      console.log(`Attempting to return ${selectedLoans.length} books`);
+      
+      // Format the data for the API to handle multiple returns with conditions and notes
+      const returnData = {
+        returns: selectedLoans.map(loan => ({
+          loan_id: loan.id,
+          returnCondition: loan.returnCondition || 'Good', // Default to Good if not specified
+          note: loan.note || ''
+        }))
+      };
+      
+      console.log('Return data:', returnData);
+      
+      const result = await window.api.returnBooks(returnData);
+      
+      if (result && result.success) {
+        setSnackbar({
+          open: true,
+          message: `Successfully returned ${selectedLoans.length} book(s)`,
+          severity: "success",
+        });
+        fetchLoansByTab(activeTab);
+        setOpenReturnDialog(false);
+      } else {
+        throw new Error(result?.message || 'Failed to return books');
+      }
     } catch (error) {
       console.error("Error returning books:", error);
       setSnackbar({
@@ -810,29 +920,54 @@ const LoanManagement = () => {
   // Handle returning a single book directly from the table
   const handleReturnSingleBook = async (loanId) => {
     try {
-      if (!loanId) {
-        console.error("Error: Missing loan ID");
-        setSnackbar({
-          open: true,
-          message: "Error: Missing loan ID",
-          severity: "error",
-        });
+      console.log(`Returning loan with ID: ${loanId}`);
+      
+      // Get the loan first to check if it's part of a batch
+      const loanData = loans.find(loan => loan.id === loanId);
+      
+      if (!loanData) {
+        throw new Error(`Loan with ID ${loanId} not found`);
+      }
+      
+      let confirmMessage = `Are you sure you want to return "${loanData.book_title}"?`;
+      let successMessage = `Book "${loanData.book_title}" has been returned successfully`;
+      
+      // If it's a batch loan, adjust the message
+      if (loanData.is_batch && loanData.total_books > 1) {
+        confirmMessage = `Are you sure you want to return all ${loanData.total_books} books in this batch?`;
+        successMessage = `${loanData.total_books} books have been returned successfully`;
+      }
+      
+      // Ask for confirmation
+      if (!window.confirm(confirmMessage)) {
         return;
       }
 
-      console.log("Returning loan with ID:", loanId);
-      await window.api.returnBooks([loanId]);
-      setSnackbar({
-        open: true,
-        message: "Book successfully returned",
-        severity: "success",
+      const result = await window.api.returnBook({
+        loan_id: loanId
       });
-      fetchLoansByTab(activeTab);
+
+      if (result.success) {
+        setSnackbar({
+          open: true,
+          message: successMessage,
+          severity: "success",
+        });
+
+        // Refresh the loans list
+        fetchLoansByTab(activeTab);
+      } else {
+        setSnackbar({
+          open: true,
+          message: result.message || "Error returning the book",
+          severity: "error",
+        });
+      }
     } catch (error) {
       console.error("Error returning book:", error);
       setSnackbar({
         open: true,
-        message: `Error returning book: ${error.message || "Unknown error"}`,
+        message: `Error: ${error.message || "Failed to return book"}`,
         severity: "error",
       });
     }
@@ -853,6 +988,52 @@ const LoanManagement = () => {
 
       console.log("Generating receipt for loan:", loan);
 
+      // Handle batch loans
+      if (loan.is_batch) {
+        // Create book objects array from batch loan data
+        const books = loan.book_titles.map((title, index) => ({
+          id: loan.book_ids[index],
+          title: title,
+          author: index === 0 ? loan.book_author : "", // Only first book has author info
+          isbn: index === 0 ? loan.book_isbn : "",
+          cover_color: index === 0 ? loan.book_color : "",
+          front_cover: index === 0 ? loan.book_cover : "",
+        }));
+
+        // Create member object from loan data
+        const member = {
+          id: loan.member_id,
+          name: loan.member_name,
+          email: loan.member_email,
+        };
+
+        // Prepare receipt data
+        const receiptInfo = {
+          transactionId: loan.transaction_id || `LOAN-${Date.now()}-${loan.member_id}`,
+          member: member,
+          checkoutDate: loan.checkout_date,
+          dueDate: loan.due_date,
+          books: books,
+          bookCopies: loan.book_copy_ids.map((id, index) => ({
+            id: id,
+            barcode: loan.book_barcodes[index] || `N/A`,
+            locationCode: "", // Batch loans may not have this detail
+          })),
+          is_batch: true,
+          total_books: loan.total_books
+        };
+
+        setReceiptData(receiptInfo);
+
+        // Generate QR code data
+        await generateQRData(receiptInfo);
+
+        // Show receipt
+        setOpenReceiptDialog(true);
+        return;
+      }
+
+      // Handle single book loan (original code)
       // Create book object from loan data
       const book = {
         id: loan.book_id,
@@ -872,7 +1053,7 @@ const LoanManagement = () => {
 
       // Prepare receipt data
       const receiptInfo = {
-        transactionId: `LOAN-${Date.now()}-${loan.member_id}`,
+        transactionId: loan.transaction_id || `LOAN-${Date.now()}-${loan.member_id}`,
         member: member,
         checkoutDate: loan.checkout_date,
         dueDate: loan.due_date,
@@ -965,12 +1146,27 @@ const LoanManagement = () => {
 
   const formatDate = (dateString) => {
     if (!dateString) return "N/A";
-    const date = new Date(dateString);
-    return date.toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
+    
+    try {
+      const date = new Date(dateString);
+      
+      // Check if the date is valid
+      if (isNaN(date.getTime())) {
+        return "Invalid Date";
+      }
+      
+      // Format date as "MMM DD, YYYY" (e.g., "Jan 01, 2023")
+      const options = { 
+        year: 'numeric', 
+        month: 'short', 
+        day: '2-digit' 
+      };
+      
+      return date.toLocaleDateString('en-US', options);
+    } catch (error) {
+      console.error("Error formatting date:", error);
+      return dateString || "N/A";
+    }
   };
 
   const renderLoanStatus = (loan) => {
@@ -1059,8 +1255,18 @@ const LoanManagement = () => {
   };
 
   const handleMemberSelect = (member) => {
-    setSelectedMember(member);
-    setOpenMemberSelectDialog(false);
+    if (openBorrowDialog) {
+      // This is for the borrow flow
+      setSelectedMember(member);
+      setOpenMemberSelectDialog(false);
+    } else {
+      // This is for the multi-return flow
+      setSelectedMemberForReturn(member);
+      setOpenMemberSelectDialog(false);
+      
+      // Now that we have a member, open the multi-return dialog
+      setMultiReturnDialogOpen(true);
+    }
   };
 
   const handleRemoveBook = (bookId) => {
@@ -1220,35 +1426,126 @@ const LoanManagement = () => {
     }
   };
 
-  // Generate QR code data
+  // Find the generateQRData function and modify it to handle content security policy restrictions
   const generateQRData = async (data) => {
-    if (!data) return "";
+    if (!data) {
+      console.error("No data provided for QR code generation");
+      return "";
+    }
 
     try {
+      // Validate required data
+      if (!data.transactionId || !data.member || !data.member.id) {
+        console.error("Missing required data for QR code generation:", data);
+        throw new Error("Incomplete receipt data");
+      }
+
       const qrData = {
         transactionId: data.transactionId,
         memberId: data.member.id,
         memberName: data.member.name,
-        loansIds: data.loansIds,
+        loansIds: data.loansIds || [],
         checkoutDate: data.checkoutDate,
         dueDate: data.dueDate,
+        type: "receipt",
       };
 
-      // Generate QR code as data URL
-      const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrData), {
-        width: 200,
-        margin: 2,
-        color: {
-          dark: "#000",
-          light: "#FFF",
-        },
-      });
+      console.log("Generating QR code with data:", qrData);
 
-      setQrCodeData(qrDataUrl);
-      return qrDataUrl;
+      // Generate QR code as data URL with CSP workaround
+      try {
+        // First try to use the standard QR code generation
+        const qrDataUrl = await QRCode.toDataURL(JSON.stringify(qrData), {
+          width: 200,
+          margin: 2,
+          errorCorrectionLevel: "H", // High error correction level
+          color: {
+            dark: "#000",
+            light: "#FFF",
+          },
+        });
+
+        console.log("QR code generated successfully");
+
+        // Create a workaround for Content Security Policy restrictions
+        // Create a Blob from the data URL and create an Object URL
+        const base64Data = qrDataUrl.split(",")[1];
+        if (base64Data) {
+          const byteCharacters = atob(base64Data);
+          const byteArrays = [];
+
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteArrays.push(byteCharacters.charCodeAt(i));
+          }
+
+          const byteArray = new Uint8Array(byteArrays);
+          const blob = new Blob([byteArray], { type: "image/png" });
+          const blobUrl = URL.createObjectURL(blob);
+
+          // Use the blob URL which is allowed by default CSP
+          setQrCodeData(blobUrl);
+          return blobUrl;
+        } else {
+          throw new Error("Failed to extract base64 data from QR code");
+        }
+      } catch (qrError) {
+        console.error("Error in QR code generation:", qrError);
+        throw qrError;
+      }
     } catch (error) {
       console.error("Error generating QR code:", error);
-      return "";
+
+      // Generate a fallback QR code with minimal data
+      try {
+        const fallbackData = {
+          transactionId: data.transactionId || `RECEIPT-${Date.now()}`,
+          type: "receipt_error",
+        };
+
+        const fallbackQr = await QRCode.toDataURL(
+          JSON.stringify(fallbackData),
+          {
+            width: 200,
+            margin: 2,
+            errorCorrectionLevel: "L",
+          }
+        );
+
+        // Convert to blob URL for CSP compliance
+        const base64Data = fallbackQr.split(",")[1];
+        if (base64Data) {
+          const byteCharacters = atob(base64Data);
+          const byteArrays = [];
+
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteArrays.push(byteCharacters.charCodeAt(i));
+          }
+
+          const byteArray = new Uint8Array(byteArrays);
+          const blob = new Blob([byteArray], { type: "image/png" });
+          const blobUrl = URL.createObjectURL(blob);
+
+          console.log("Generated fallback QR code using blob URL");
+          setQrCodeData(blobUrl);
+
+          // Show warning but don't block receipt display
+          setSnackbar({
+            open: true,
+            message: "QR code generated with limited data",
+            severity: "warning",
+          });
+
+          return blobUrl;
+        } else {
+          throw new Error(
+            "Failed to extract base64 data from fallback QR code"
+          );
+        }
+      } catch (fallbackError) {
+        console.error("Failed to generate fallback QR code:", fallbackError);
+        setQrCodeData("");
+        return "";
+      }
     }
   };
 
@@ -1849,10 +2146,20 @@ const LoanManagement = () => {
     setIsRepairing(true);
     try {
       // Update the loans table schema
-      await window.api.updateLoansTable();
+      const loansTableResult = await window.api.updateLoansTable();
+      if (!loansTableResult.success) {
+        throw new Error(
+          loansTableResult.message || "Failed to update loans table"
+        );
+      }
 
       // Update book copies table schema
-      await window.api.updateBookCopiesTable();
+      const bookCopiesResult = await window.api.updateBookCopiesTable();
+      if (!bookCopiesResult.success) {
+        throw new Error(
+          bookCopiesResult.message || "Failed to update book copies table"
+        );
+      }
 
       // Call our new repair function to fix missing book_id fields
       try {
@@ -1870,6 +2177,9 @@ const LoanManagement = () => {
         console.error("Error during loan data repair:", repairError);
         // Continue with the process even if this specific repair fails
       }
+
+      // Clear the schema issue flag
+      setHasSchemaIssue(false);
 
       setSnackbar({
         open: true,
@@ -1894,6 +2204,7 @@ const LoanManagement = () => {
           "Failed to repair database: " + (error.message || "Unknown error"),
         severity: "error",
       });
+      setHasSchemaIssue(true);
     } finally {
       setIsRepairing(false);
     }
@@ -1914,42 +2225,90 @@ const LoanManagement = () => {
 
       console.log("Generating QR code for loan:", loan.id);
 
-      // Create loan QR data
+      // Create loan QR data with more robust data
       const qrData = {
-        transactionId: `LOAN-${Date.now()}-${loan.member_id}`,
-        loanIds: [loan.id],
+        transactionId: `LOAN-${Date.now()}-${loan.member_id || "unknown"}`,
+        loanId: loan.id,
+        bookId: loan.book_id || "unknown",
+        memberId: loan.member_id || "unknown",
+        checkoutDate: loan.checkout_date || new Date().toISOString(),
+        type: "loan_record",
       };
 
-      // Generate QR code
-      const qrCodeUrl = await QRCode.toDataURL(JSON.stringify(qrData), {
-        width: 150,
-        margin: 1,
-      });
+      // Generate QR code with error handling
+      try {
+        const qrCodeUrl = await QRCode.toDataURL(JSON.stringify(qrData), {
+          width: 150,
+          margin: 1,
+          errorCorrectionLevel: "H", // Highest error correction capability
+          color: {
+            dark: "#000",
+            light: "#FFF",
+          },
+        });
 
-      // Make sure the event target still exists in the DOM before using it
-      if (
-        event &&
-        event.currentTarget &&
-        document.contains(event.currentTarget)
-      ) {
-        setCurrentLoanQR(qrCodeUrl);
-        setQrPopoverAnchor(event.currentTarget);
-      } else {
-        // If the event target is no longer in the DOM, show an error
-        console.warn("Button element is no longer in the DOM");
+        // Convert data URL to blob URL for CSP compliance
+        const base64Data = qrCodeUrl.split(",")[1];
+        if (base64Data) {
+          const byteCharacters = atob(base64Data);
+          const byteArrays = [];
+
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteArrays.push(byteCharacters.charCodeAt(i));
+          }
+
+          const byteArray = new Uint8Array(byteArrays);
+          const blob = new Blob([byteArray], { type: "image/png" });
+          const blobUrl = URL.createObjectURL(blob);
+
+          setCurrentLoanQR(blobUrl);
+          setQrPopoverAnchor(event.currentTarget);
+        } else {
+          throw new Error("Failed to extract base64 data from QR code");
+        }
+      } catch (qrError) {
+        console.error("QR generation error:", qrError);
+        // Create a simpler fallback QR with less data
+        const fallbackData = { loanId: loan.id, type: "loan_record" };
+        const fallbackQR = await QRCode.toDataURL(
+          JSON.stringify(fallbackData),
+          {
+            width: 150,
+            margin: 1,
+            errorCorrectionLevel: "L", // Lower complexity for fallback
+          }
+        );
+
+        // Convert to blob URL
+        const base64Data = fallbackQR.split(",")[1];
+        if (base64Data) {
+          const byteCharacters = atob(base64Data);
+          const byteArrays = [];
+
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteArrays.push(byteCharacters.charCodeAt(i));
+          }
+
+          const byteArray = new Uint8Array(byteArrays);
+          const blob = new Blob([byteArray], { type: "image/png" });
+          const blobUrl = URL.createObjectURL(blob);
+
+          setCurrentLoanQR(blobUrl);
+          setQrPopoverAnchor(event.currentTarget);
+        }
+
+        // Inform user but still show the QR
         setSnackbar({
           open: true,
-          message: "Could not show QR code. Please try again.",
+          message: "QR code generated with limited data",
           severity: "warning",
         });
       }
     } catch (error) {
-      console.error("Error generating QR code:", error);
+      console.error("Error showing QR code:", error);
       setSnackbar({
         open: true,
-        message: `Error generating QR code: ${
-          error.message || "Unknown error"
-        }`,
+        message: "Error showing QR: " + (error.message || "Unknown error"),
         severity: "error",
       });
     }
@@ -2011,30 +2370,19 @@ const LoanManagement = () => {
           <Button
             variant="outlined"
             color="secondary"
-            startIcon={<QrCodeScannerIcon />}
-            onClick={handleOpenQRScannerDialog}
+            startIcon={<AssignmentReturnedIcon />}
+            onClick={handleOpenMultiReturnDialog}
             sx={{ mr: 2 }}
           >
+            Return Multiple Books
+          </Button>
+          <Button
+            variant="outlined"
+            color="secondary"
+            startIcon={<QrCodeScannerIcon />}
+            onClick={handleOpenQRScannerDialog}
+          >
             Scan QR
-          </Button>
-          <Button
-            variant="outlined"
-            color="warning"
-            startIcon={<AutorenewIcon />}
-            onClick={handleRepairDatabase}
-            disabled={isRepairing}
-          >
-            {isRepairing ? "Updating..." : "Update Schema"}
-          </Button>
-        </Box>
-        <Box sx={{ display: "flex", gap: 2 }}>
-          <Button
-            variant="outlined"
-            color="error"
-            startIcon={<CloseIcon />}
-            onClick={handleOpenClearLoansDialog}
-          >
-            Clear All Loans
           </Button>
         </Box>
       </Box>
@@ -2072,27 +2420,6 @@ const LoanManagement = () => {
         />
       </Paper>
 
-      {/* Add a message for users when there's a database error */}
-      {loans.length === 0 && !loading && (
-        <Paper
-          elevation={3}
-          sx={{ p: 3, mb: 3, bgcolor: "rgba(255, 243, 224, 0.8)" }}
-        >
-          <Typography variant="h6" color="warning.dark" gutterBottom>
-            <WarningIcon sx={{ mr: 1, verticalAlign: "middle" }} />
-            Database Schema Issue Detected
-          </Typography>
-          <Typography variant="body1" paragraph>
-            It appears there might be an issue with the loans table in the
-            database. This usually happens when the application has been updated
-            with new features.
-          </Typography>
-          <Typography variant="body1" paragraph>
-            Click the "Update Schema" button above to fix this issue.
-          </Typography>
-        </Paper>
-      )}
-
       <TableContainer component={Paper} sx={{ borderRadius: 2 }}>
         <Table>
           <TableHead sx={{ bgcolor: "var(--secondary-dark)" }}>
@@ -2127,7 +2454,25 @@ const LoanManagement = () => {
                   <TableCell>
                     <Box sx={{ display: "flex", alignItems: "center" }}>
                       <Box sx={{ mr: 1 }}>
-                        {loan.book_cover ? (
+                        {/* For batch loans with multiple books */}
+                        {loan.is_batch ? (
+                          <Box
+                            sx={{
+                              width: 40,
+                              height: 60,
+                              bgcolor: "#2196f3", // Blue color for batch loans
+                              borderRadius: 1,
+                              display: "flex",
+                              justifyContent: "center",
+                              alignItems: "center",
+                              color: "#fff",
+                              fontWeight: "bold",
+                              fontSize: "16px",
+                            }}
+                          >
+                            {loan.total_books}
+                          </Box>
+                        ) : loan.book_cover ? (
                           <Box
                             component="img"
                             src={loan.book_cover}
@@ -2164,19 +2509,33 @@ const LoanManagement = () => {
                         <Typography variant="body1">
                           {loan.book_title}
                         </Typography>
-                        <Typography variant="caption" color="textSecondary">
-                          ISBN: {loan.book_isbn}
-                        </Typography>
+                        {loan.is_batch ? (
+                          <Typography variant="caption" color="primary">
+                            Batch borrowing of {loan.total_books} books
+                          </Typography>
+                        ) : (
+                          <Typography variant="caption" color="textSecondary">
+                            ISBN: {loan.book_isbn}
+                          </Typography>
+                        )}
                       </Box>
                     </Box>
                   </TableCell>
                   <TableCell>
-                    <Typography variant="body2" sx={{ fontWeight: "medium" }}>
-                      Barcode: {loan.book_barcode}
-                    </Typography>
-                    <Typography variant="caption" color="textSecondary">
-                      Location: {loan.book_location_code}
-                    </Typography>
+                    {loan.is_batch ? (
+                      <Typography variant="body2" sx={{ fontWeight: "medium" }}>
+                        Multiple books ({loan.total_books})
+                      </Typography>
+                    ) : (
+                      <Typography variant="body2" sx={{ fontWeight: "medium" }}>
+                        Barcode: {loan.book_barcode}
+                      </Typography>
+                    )}
+                    {!loan.is_batch && (
+                      <Typography variant="caption" color="textSecondary">
+                        Location: {loan.book_location_code}
+                      </Typography>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Typography variant="body1">{loan.member_name}</Typography>
@@ -2929,7 +3288,15 @@ const LoanManagement = () => {
                             selectedLoans.filter((l) => l.id !== loan.id)
                           );
                         } else {
-                          setSelectedLoans([...selectedLoans, loan]);
+                          // Add the loan with default condition and note
+                          setSelectedLoans([
+                            ...selectedLoans, 
+                            { 
+                              ...loan, 
+                              returnCondition: 'Good', 
+                              note: '' 
+                            }
+                          ]);
                         }
                       }}
                     >
@@ -3089,24 +3456,84 @@ const LoanManagement = () => {
                     Ready to Return ({selectedLoans.length} book
                     {selectedLoans.length !== 1 ? "s" : ""})
                   </Typography>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                    Please specify the return condition and any notes for each book.
+                  </Typography>
                   <Divider sx={{ my: 1 }} />
-                  <Box
-                    sx={{ display: "flex", flexWrap: "wrap", gap: 1, mt: 1 }}
-                  >
-                    {selectedLoans.map((loan) => (
-                      <Chip
-                        key={loan.id}
-                        label={loan.book_title}
-                        onDelete={() =>
-                          setSelectedLoans(
-                            selectedLoans.filter((l) => l.id !== loan.id)
-                          )
-                        }
-                        color={isLoanOverdue(loan) ? "error" : "primary"}
-                        variant="outlined"
-                      />
-                    ))}
-                  </Box>
+                  
+                  {/* Detailed view for each selected book */}
+                  {selectedLoans.map((loan) => (
+                    <Box 
+                      key={loan.id} 
+                      sx={{ 
+                        mt: 2, 
+                        p: 1,
+                        borderRadius: 1,
+                        border: '1px solid',
+                        borderColor: isLoanOverdue(loan) ? 'error.light' : 'divider',
+                        '&:hover': { boxShadow: 1 } 
+                      }}
+                    >
+                      <Grid container spacing={2} alignItems="center">
+                        <Grid item xs={12} sm={6}>
+                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            <IconButton 
+                              size="small" 
+                              onClick={() => setSelectedLoans(selectedLoans.filter(l => l.id !== loan.id))}
+                              sx={{ mr: 1 }}
+                            >
+                              <CloseIcon fontSize="small" />
+                            </IconButton>
+                            <Box>
+                              <Typography variant="subtitle2">{loan.book_title}</Typography>
+                              <Typography variant="caption" color="text.secondary">
+                                Borrowed: {formatDate(loan.checkout_date)} | 
+                                Due: {formatDate(loan.due_date)}
+                                {isLoanOverdue(loan) && (
+                                  <Typography 
+                                    component="span" 
+                                    variant="caption" 
+                                    color="error" 
+                                    sx={{ ml: 1 }}
+                                  >
+                                    (Overdue)
+                                  </Typography>
+                                )}
+                              </Typography>
+                            </Box>
+                          </Box>
+                        </Grid>
+                        
+                        <Grid item xs={12} sm={3}>
+                          <FormControl size="small" fullWidth>
+                            <InputLabel id={`condition-label-${loan.id}`}>Condition</InputLabel>
+                            <Select
+                              labelId={`condition-label-${loan.id}`}
+                              value={loan.returnCondition || 'Good'}
+                              label="Condition"
+                              onChange={(e) => handleLoanConditionChange(loan.id, e.target.value)}
+                            >
+                              <MenuItem value="Good">Good</MenuItem>
+                              <MenuItem value="Damaged">Damaged</MenuItem>
+                              <MenuItem value="Lost">Lost</MenuItem>
+                            </Select>
+                          </FormControl>
+                        </Grid>
+                        
+                        <Grid item xs={12} sm={3}>
+                          <TextField 
+                            size="small"
+                            fullWidth
+                            label="Notes"
+                            variant="outlined"
+                            value={loan.note || ''}
+                            onChange={(e) => handleLoanNoteChange(loan.id, e.target.value)}
+                            placeholder="Optional"
+                          />
+                        </Grid>
+                      </Grid>
+                    </Box>
+                  ))}
                 </Paper>
               </Grid>
             )}
@@ -3748,21 +4175,12 @@ const LoanManagement = () => {
         open={snackbar.open}
         autoHideDuration={6000}
         onClose={handleCloseSnackbar}
-        anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
-        sx={{ mb: 2, mr: 2 }}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
       >
         <Alert
           onClose={handleCloseSnackbar}
           severity={snackbar.severity}
-          variant="filled"
-          sx={{
-            width: "100%",
-            boxShadow: 3,
-            "& .MuiAlert-icon": {
-              fontSize: "1.5rem",
-              alignItems: "center",
-            },
-          }}
+          sx={{ width: "100%" }}
         >
           {snackbar.message}
         </Alert>
@@ -3832,6 +4250,23 @@ const LoanManagement = () => {
           )}
         </Box>
       </Popover>
+
+      {/* Debug info before rendering MultiBookReturn */}
+      {console.log('About to render MultiBookReturn with props:', {
+        open: multiReturnDialogOpen,
+        memberId: selectedMemberForReturn?.id,
+        memberName: selectedMemberForReturn?.name,
+        selectedMemberExists: !!selectedMemberForReturn
+      })}
+
+      {/* Add multi-book return dialog */}
+      <MultiBookReturn
+        open={multiReturnDialogOpen}
+        onClose={handleCloseMultiReturnDialog}
+        memberId={selectedMemberForReturn ? Number(selectedMemberForReturn.id) : undefined}
+        onSuccess={handleMultiReturnSuccess}
+        currentUser={selectedMemberForReturn}
+      />
     </Box>
   );
 };
